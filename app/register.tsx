@@ -1,27 +1,33 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useState } from 'react';
 import {
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
-  ActivityIndicator,
-  TouchableWithoutFeedback,
-  Keyboard,
   Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableWithoutFeedback,
+  View,
 } from 'react-native';
 import { Link, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import AppButton from '@/components/AppButton';
+import FeedbackBanner from '@/components/FeedbackBanner';
+import FormField from '@/components/FormField';
+import GlassCard from '@/components/GlassCard';
 import Header from '@/components/Header';
 import { COLORS } from '@/constants/colors';
 import { GUTTER, RADIUS, SPACING } from '@/constants/theme';
 import { signUp } from '@/lib/auth';
-
-type Field = 'fullName' | 'email' | 'password' | 'confirmPassword';
+import {
+  validateEmail,
+  validateName,
+  validatePassword,
+  validatePasswordConfirm,
+} from '@/lib/validation';
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -32,38 +38,33 @@ export default function RegisterScreen() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [role, setRole] = useState<'student' | 'teacher'>('student');
-  const [focused, setFocused] = useState<Field | null>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  // Event: user presses "Create Account" → validate → register
   const handleRegister = async () => {
     setError(null);
 
-    if (!fullName.trim() || !email.trim() || !password || !confirmPassword) {
-      setError('All fields are required.');
-      return;
-    }
+    const nameError = validateName(fullName, 'Full name');
+    if (nameError) return setError(nameError);
 
-    if (password !== confirmPassword) {
-      setError('Passwords do not match.');
-      return;
-    }
+    const emailError = validateEmail(email);
+    if (emailError) return setError(emailError);
 
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
-      return;
-    }
+    const passwordError = validatePassword(password);
+    if (passwordError) return setError(passwordError);
+
+    const confirmError = validatePasswordConfirm(password, confirmPassword);
+    if (confirmError) return setError(confirmError);
 
     setLoading(true);
-
     try {
-      const { data, error: authError } = await signUp(
-        email.trim(),
-        password,
-        { full_name: fullName.trim(), role }
-      );
+      const { data, error: authError } = await signUp(email.trim(), password, {
+        full_name: fullName.trim(),
+        role,
+      });
 
       if (authError) {
         setError(authError.message);
@@ -72,7 +73,7 @@ export default function RegisterScreen() {
       } else {
         setSuccess(true);
       }
-    } catch (err) {
+    } catch {
       setError('An unexpected error occurred. Please try again.');
     } finally {
       setLoading(false);
@@ -93,128 +94,106 @@ export default function RegisterScreen() {
             showsVerticalScrollIndicator={false}
           >
             <View style={styles.headerContainer}>
-              <Header title="QR Attendance" />
+              <Header title="QR Attendance" subtitle="School Event Management" />
             </View>
 
-            <Text style={styles.title}>Create Account</Text>
-            <Text style={styles.subtitle}>Register to start recording attendance</Text>
-
             {success ? (
-              <View style={styles.successContainer}>
+              <GlassCard style={styles.card}>
+                <View style={styles.successIcon}>
+                  <Ionicons name="mail-open-outline" size={34} color={COLORS.accent} />
+                </View>
                 <Text style={styles.successTitle}>Check your email!</Text>
                 <Text style={styles.successText}>
-                  We sent a confirmation link to {email}. Click the link to verify your
-                  account, then come back and sign in.
+                  We sent a confirmation link to {email}. Verify your account, then come back and
+                  sign in.
                 </Text>
-                <Link href="/login" style={styles.link}>
-                  Back to Sign In
-                </Link>
-              </View>
+                <AppButton
+                  theme="primary"
+                  title="Back to Sign In"
+                  icon="log-in-outline"
+                  onPress={() => router.replace('/login')}
+                />
+              </GlassCard>
             ) : (
-              <View style={styles.form}>
-                <Text style={styles.label}>Full Name</Text>
-                <TextInput
-                  style={[styles.input, focused === 'fullName' && styles.inputFocused]}
+              <GlassCard style={styles.card}>
+                <Text style={styles.title}>Create Account</Text>
+                <Text style={styles.subtitle}>Register to start recording attendance</Text>
+
+                <FormField
+                  label="Full Name"
                   value={fullName}
                   onChangeText={setFullName}
-                  onFocus={() => setFocused('fullName')}
-                  onBlur={() => setFocused(null)}
-                  placeholder="e.g. John Doe"
-                  placeholderTextColor={COLORS.textSecondary}
+                  placeholder="e.g. Juan Dela Cruz"
                   autoCapitalize="words"
                   editable={!loading}
+                  icon="person-outline"
                 />
-
-                <Text style={styles.label}>Email</Text>
-                <TextInput
-                  style={[styles.input, focused === 'email' && styles.inputFocused]}
+                <FormField
+                  label="Email"
                   value={email}
                   onChangeText={setEmail}
-                  onFocus={() => setFocused('email')}
-                  onBlur={() => setFocused(null)}
                   placeholder="your.email@school.edu"
-                  placeholderTextColor={COLORS.textSecondary}
-                  autoCapitalize="none"
                   keyboardType="email-address"
+                  autoCapitalize="none"
                   editable={!loading}
+                  icon="mail-outline"
                 />
-
-                <Text style={styles.label}>Password</Text>
-                <TextInput
-                  style={[styles.input, focused === 'password' && styles.inputFocused]}
+                <FormField
+                  label="Password"
                   value={password}
                   onChangeText={setPassword}
-                  onFocus={() => setFocused('password')}
-                  onBlur={() => setFocused(null)}
-                  placeholder="At least 6 characters"
-                  placeholderTextColor={COLORS.textSecondary}
+                  placeholder="Min. 8 chars, letter + number"
                   secureTextEntry
                   editable={!loading}
+                  icon="lock-closed-outline"
                 />
-
-                <Text style={styles.label}>Confirm Password</Text>
-                <TextInput
-                  style={[styles.input, focused === 'confirmPassword' && styles.inputFocused]}
+                <FormField
+                  label="Confirm Password"
                   value={confirmPassword}
                   onChangeText={setConfirmPassword}
-                  onFocus={() => setFocused('confirmPassword')}
-                  onBlur={() => setFocused(null)}
                   placeholder="Re-enter your password"
-                  placeholderTextColor={COLORS.textSecondary}
                   secureTextEntry
                   editable={!loading}
+                  icon="lock-closed-outline"
                 />
 
-                <Text style={styles.label}>I am a...</Text>
+                <Text style={styles.label}>I am a…</Text>
                 <View style={styles.roleRow}>
-                  <Pressable
-                    style={[
-                      styles.roleChip,
-                      role === 'student' && styles.roleChipActive,
-                    ]}
-                    onPress={() => setRole('student')}
-                  >
-                    <Text
-                      style={[
-                        styles.roleChipText,
-                        role === 'student' && styles.roleChipTextActive,
-                      ]}
+                  {(['student', 'teacher'] as const).map((option) => (
+                    <Pressable
+                      key={option}
+                      style={[styles.roleChip, role === option && styles.roleChipActive]}
+                      onPress={() => setRole(option)}
                     >
-                      Student
-                    </Text>
-                  </Pressable>
-
-                  <Pressable
-                    style={[
-                      styles.roleChip,
-                      role === 'teacher' && styles.roleChipActive,
-                    ]}
-                    onPress={() => setRole('teacher')}
-                  >
-                    <Text
-                      style={[
-                        styles.roleChipText,
-                        role === 'teacher' && styles.roleChipTextActive,
-                      ]}
-                    >
-                      Teacher
-                    </Text>
-                  </Pressable>
+                      <Ionicons
+                        name={option === 'student' ? 'book-outline' : 'school-outline'}
+                        size={18}
+                        color={role === option ? COLORS.accent : COLORS.textSecondary}
+                      />
+                      <Text
+                        style={[styles.roleChipText, role === option && styles.roleChipTextActive]}
+                      >
+                        {option === 'student' ? 'Student' : 'Teacher'}
+                      </Text>
+                    </Pressable>
+                  ))}
                 </View>
+                <Text style={styles.roleHint}>
+                  Administrator accounts are assigned by the school system administrator.
+                </Text>
 
-                {error && <Text style={styles.error}>{error}</Text>}
+                {error ? (
+                  <FeedbackBanner tone="error" title="Registration failed" message={error} />
+                ) : null}
 
-                {loading ? (
-                  <ActivityIndicator size="large" color={COLORS.primary} style={styles.loader} />
-                ) : (
-                  <AppButton
-                    theme="primary"
-                    title="Sign Up"
-                    icon="person-add-outline"
-                    onPress={handleRegister}
-                  />
-                )}
-              </View>
+                <AppButton
+                  theme="primary"
+                  title="Create Account"
+                  icon="person-add-outline"
+                  onPress={handleRegister}
+                  loading={loading}
+                />
+              </GlassCard>
             )}
 
             {!success && (
@@ -232,7 +211,7 @@ export default function RegisterScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: 'transparent',
   },
   keyboardView: {
     flex: 1,
@@ -240,68 +219,56 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     paddingHorizontal: GUTTER,
-    paddingBottom: SPACING.xxxl,
+    paddingVertical: SPACING.xl,
+    justifyContent: 'center',
   },
   headerContainer: {
     alignItems: 'center',
-    marginTop: SPACING.md,
     marginBottom: SPACING.lg,
   },
+  card: {
+    borderRadius: RADIUS.xl,
+    padding: SPACING.xl,
+  },
   title: {
-    fontSize: 28,
-    fontWeight: '700',
+    fontSize: 26,
+    fontWeight: '800',
     color: COLORS.textPrimary,
-    textAlign: 'center',
     marginBottom: SPACING.xs,
   },
   subtitle: {
     fontSize: 15,
     color: COLORS.textSecondary,
-    lineHeight: 21,
-    textAlign: 'center',
-    marginBottom: SPACING.xxxl,
-  },
-  form: {
-    marginBottom: SPACING.xxl,
+    marginBottom: SPACING.lg,
   },
   label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.textPrimary,
-    marginBottom: SPACING.xs,
-    marginTop: SPACING.md,
-  },
-  input: {
-    backgroundColor: COLORS.card,
-    borderRadius: RADIUS.md,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.md,
-    fontSize: 16,
-    color: COLORS.textPrimary,
-  },
-  inputFocused: {
-    borderColor: COLORS.primary,
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: SPACING.sm,
   },
   roleRow: {
     flexDirection: 'row',
     gap: SPACING.md,
-    marginTop: SPACING.xs,
-    marginBottom: SPACING.md,
+    marginBottom: SPACING.sm,
   },
   roleChip: {
     flex: 1,
+    flexDirection: 'row',
+    gap: 8,
     paddingVertical: SPACING.md,
     alignItems: 'center',
+    justifyContent: 'center',
     borderRadius: RADIUS.md,
     borderWidth: 1,
     borderColor: COLORS.border,
-    backgroundColor: COLORS.card,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
   },
   roleChipActive: {
-    borderColor: COLORS.primary,
-    backgroundColor: COLORS.primaryTint,
+    borderColor: COLORS.accent,
+    backgroundColor: 'rgba(76, 121, 255, 0.14)',
   },
   roleChipText: {
     fontSize: 15,
@@ -309,36 +276,37 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
   },
   roleChipTextActive: {
-    color: COLORS.primaryDark,
+    color: COLORS.textPrimary,
     fontWeight: '700',
   },
-  error: {
-    fontSize: 14,
-    color: COLORS.danger,
-    marginTop: SPACING.md,
-    marginBottom: SPACING.xs,
-  },
-  loader: {
-    marginVertical: SPACING.lg,
+  roleHint: {
+    fontSize: 12,
+    color: COLORS.textMuted,
+    marginBottom: SPACING.md,
+    lineHeight: 17,
   },
   link: {
     fontSize: 14,
-    color: COLORS.primary,
+    color: COLORS.accent,
     fontWeight: '600',
     textAlign: 'center',
+    marginTop: SPACING.lg,
   },
-  successContainer: {
-    alignItems: 'center',
-    marginBottom: SPACING.xxl,
-    padding: SPACING.xl,
-    backgroundColor: COLORS.card,
-    borderRadius: RADIUS.lg,
-    borderWidth: 1,
+  successIcon: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: 'rgba(11, 48, 152, 0.45)',
     borderColor: COLORS.border,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    marginBottom: SPACING.lg,
   },
   successTitle: {
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 20,
+    fontWeight: '800',
     color: COLORS.textPrimary,
     marginBottom: SPACING.sm,
     textAlign: 'center',
@@ -346,8 +314,8 @@ const styles = StyleSheet.create({
   successText: {
     fontSize: 14,
     color: COLORS.textSecondary,
-    lineHeight: 20,
-    marginBottom: SPACING.lg,
+    lineHeight: 21,
+    marginBottom: SPACING.xl,
     textAlign: 'center',
   },
 });

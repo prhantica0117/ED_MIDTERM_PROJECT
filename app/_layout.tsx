@@ -1,8 +1,11 @@
 import { useEffect } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+
+import AnamorphicBackground from '@/components/AnamorphicBackground';
 import { COLORS } from '@/constants/colors';
+import { SPACING } from '@/constants/theme';
 import { useAuth } from '@/lib/auth';
 
 export default function RootLayout() {
@@ -10,6 +13,7 @@ export default function RootLayout() {
   const segments = useSegments();
   const router = useRouter();
 
+  // Session-based route guard: unauthenticated → /login, authenticated → /(tabs)
   useEffect(() => {
     if (loading) return;
 
@@ -17,39 +21,54 @@ export default function RootLayout() {
     const inAuthGroup = path === 'login' || path === 'register' || path === '(auth)';
 
     if (session && inAuthGroup) {
-      // User is logged in -> Send to main app tabs
       router.replace('/(tabs)');
     } else if (!session && !inAuthGroup) {
-      // User is logged out -> Send to login screen
       router.replace('/login');
     }
   }, [session, loading, segments]);
 
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
-      </View>
-    );
-  }
-
   return (
-    <>
-      <StatusBar style="dark" />
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="login" />
-        <Stack.Screen name="register" />
-        <Stack.Screen name="(tabs)" />
-      </Stack>
-    </>
+    <View style={styles.root}>
+      {/* Anamorphic gradient backdrop — sits behind every screen */}
+      <AnamorphicBackground />
+      <StatusBar style="light" />
+
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={COLORS.accent} />
+          <Text style={styles.loadingText}>Starting QR Attendance…</Text>
+        </View>
+      ) : (
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: COLORS.backgroundDeep },
+          }}
+        >
+          <Stack.Screen name="login" />
+          <Stack.Screen name="register" />
+          <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="+not-found" />
+        </Stack>
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: COLORS.background,
+    backgroundColor: 'transparent',
+  },
+  loadingText: {
+    marginTop: SPACING.md,
+    fontSize: 14,
+    color: COLORS.textSecondary,
   },
 });

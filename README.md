@@ -1,57 +1,120 @@
-# SETUP COMMANDS — QR Attendance App
+# QR Attendance — School Event Attendance with QR Codes
 
-> **Target:** First-year students | **Expo SDK:** 54 | **Expo Go:** 54.0.8
+Expo (SDK 54) + TypeScript + expo-router + Supabase (Auth + Postgres + Realtime).
+Dark anamorphic theme: deep-navy background `#04091F`, royal blue `#0B3098`,
+crimson `#BD1B20`, wood brown `#3A1E14`, white text only — no white backgrounds.
 
----
+## 1. Purpose
 
-## PREREQUISITES
+A school manages event attendance with QR codes: staff create events, the system
+generates a QR code per event, students scan it to record attendance, and
+teachers/admins monitor records live.
 
-| Tool | Download | Verify |
+## 2. Roles and features
+
+| Role | Tabs | Can do |
 |---|---|---|
-| Node.js (LTS) | https://nodejs.org/en | `node --version` |
-| VS Code | https://code.visualstudio.com | (open it) |
-| Expo Go 54.0.8 | Play Store → "Expo Go" | (version in app settings) |
+| Student | Home, Scan, Records, Profile | view open events, scan QR / enter code, record attendance, view own history |
+| Teacher | Home, Events, Records, Profile | CRUD events, close/reopen, generate QR, monitor own events live |
+| Admin | Home, Events, Records, Users, Profile | all teacher powers (all events) + manage roles + correct/delete rows |
 
----
+QR flow: staff creates event, system generates QR, student scans, system
+validates, attendance recorded, confirmation shown.
 
-## STEP 1 — Create the App
+Validation blocks: duplicate check-ins (UNIQUE student+event plus pre-check),
+closed events (app check plus DB trigger), invalid QR codes (strict parser, no
+auto-creation), non-student recording (role guard plus RLS), and events outside
+their time window (not-started / ended feedback).
 
-```powershell
-cd D:\QR-ATT
-npx create-expo-app@latest qr-att
+Each check-in stores: student, event, date, time, and status
+(present / late / absent, auto late after start time).
 
-# When prompted, select "SDK 54"
-# Wait for npm install (~2 min)
-```
-
----
-
-## STEP 2 — Install Matching Versions
-
-The default install may need these fixed versions that match Expo Go 54.0.8:
+## 3. Setup
 
 ```powershell
-npm install expo@~54.0.35 react@19.1.0 react-native@0.81.5 expo-router@~6.0.24 @expo/vector-icons@^15.0.3 expo-linking@~8.0.12 expo-constants@~18.0.13 expo-font@~14.0.12 expo-status-bar@~3.0.9 expo-splash-screen@~31.0.13 react-native-screens@~4.16.0 react-native-safe-area-context@~5.6.0 react-native-gesture-handler@~2.28.0 react-native-reanimated@~4.1.1 react-dom@19.1.0 react-native-web@~0.21.0 @types/react@~19.1.0 typescript@~5.9.2 --legacy-peer-deps
+npm install
+Copy-Item .env.example .env   # then fill in EXPO_PUBLIC_SUPABASE_URL + ANON key
+npx expo start                # press W for web, or scan with Expo Go 54
 ```
 
----
+Database: open Supabase, SQL Editor, paste the whole `SUPABASE_SCHEMA.md` SQL
+block (temporary paste file, byte-identical to `supabase/schema.sql`) and Run
+once — tables, migration of existing rows, RLS, triggers, realtime included.
+Then delete `SUPABASE_SCHEMA.md`. Register accounts in the app, then promote
+one to admin:
 
-## STEP 3 — Start
+```sql
+UPDATE public.profiles SET role = 'admin' WHERE email = 'you@example.com';
+```
+
+Never commit `.env` or any service-role key. The app only uses the public anon
+key; RLS enforces everything else server-side.
+
+## 4. Database design
+
+Relationships: auth.users 1-1 profiles; profiles 1-N events (created_by);
+profiles 1-N attendance (student_id); events 1-N attendance (event_id).
+Attendance has UNIQUE (student_id, event_id) so duplicates are impossible, and
+corrected_by points at the admin who last fixed the row.
+
+Tables: profiles (id, email, full_name, role student/teacher/admin); events
+(code, title, date, start/end, venue, description, status open/closed,
+created_by); attendance (student, event, attended_date, recorded_at, status).
+
+## 5. Authentication vs authorization
+
+Authentication: Supabase Auth email/password (hashed server-side), persisted
+session via onAuthStateChange, secure sign-out. The session gate in
+app/_layout.tsx redirects to /login when signed out.
+
+Authorization: profiles.role drives lib/roles.ts helpers (isStaff, canScan,
+canManageEvents, canViewAllAttendance, canManageUsers) used by the tab bar AND
+every screen, while server-side RLS mirrors the same rules so bypassing the UI
+still fails.
+
+## 6. Event-driven programming (Event, Handler, Action, Result)
+
+1. Login pressed — handleLogin — signInWithPassword — session, go Home.
+2. Register pressed — handleRegister — signUp with name/role — profile created.
+3. Sign Out pressed — handleSignOut — auth.signOut — session cleared, to login.
+4. Auth state changes — onAuthStateChange — update context — screens react.
+5. QR detected — handleBarCodeScanned — parse then registerAttendance — card ok
+   or typed error banner.
+6. Code button pressed — manual onPress — same pipeline as camera — works on web.
+7. Event created — handleSave — validate then createEvent — new event plus QR.
+8. Status toggled — toggleStatus — setEventStatus open/closed — pill flips and
+   closed events reject scans.
+9. DB row inserted — watchAttendance realtime channel — refetch — staff monitor
+   updates live with no refresh.
+10. Invalid QR — parseQrPayload — reject unknown format/code — invalid feedback.
+11. Duplicate scan — pre-check plus unique constraint — abort — already-recorded
+    warning.
+12. Closed event scanned — status check plus DB trigger — abort — closed message.
+13. Role changed — handleRoleChange — setUserRole — pill refreshes.
+14. Data refreshed — pull-to-refresh / focus effects — reload — latest shown.
+
+## 7. UI feedback
+
+Glassmorphic dark cards on an animated anamorphic gradient (royal-blue, crimson,
+brown streaks, SVG only, no white surfaces). LoadingState spinners,
+FeedbackBanner success/error/warning tones, EmptyState guidance, status pills
+(open/closed, present/late/absent, roles), inline form validation errors,
+pull-to-refresh, and unauthorized lock screens.
+
+## 8. Validation
 
 ```powershell
-npx expo start
+npx tsc --noEmit               # type check, must be clean
+npx expo export --platform web # production bundle proof
+npx expo start                 # manual walkthrough per section 2
 ```
 
-Scan QR code with Expo Go. Or press `W` for web.
+Exam demo: register student plus teacher, promote admin via SQL, teacher creates
+event, QR modal shows, student scans, try duplicate/closed/invalid cases, watch
+the realtime monitor on a second device, admin corrects a row, sign out.
 
----
 
-## TROUBLESHOOTING
+Triggers: handle_new_user auto-creates a profile on sign-up (copies name/role
+from auth metadata); reject_closed_event_attendance rejects inserts for closed
+events. Realtime publication includes attendance plus events.
 
-| Problem | Solution |
-|---|---|
-| npm install fails | Use `npm install --legacy-peer-deps` |
-| App crashes in Expo Go | Make sure all versions match STEP 2 exactly |
-| QR won't scan | Phone + computer on same WiFi |
-| White screen | Wait 10s, or shake → Reload |
-| TypeScript errors | Run `npx tsc --noEmit` |

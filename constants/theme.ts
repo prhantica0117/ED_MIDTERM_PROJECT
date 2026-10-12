@@ -29,15 +29,41 @@ export const SHADOW = {
   card: {
     shadowColor: COLORS.shadow,
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
+    shadowOpacity: 0.25,
     shadowRadius: 8,
     elevation: 2,
   },
   elevated: {
     shadowColor: COLORS.shadow,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.35,
     shadowRadius: 12,
     elevation: 4,
+  },
+} as const;
+
+/**
+ * Shared "glassmorphism" surface used by every card/panel. Translucent white
+ * over the deep-navy anamorphic background — no opaque white anywhere.
+ */
+export const GLASS = {
+  card: {
+    backgroundColor: COLORS.card,
+    borderColor: COLORS.border,
+    borderWidth: 1,
+    borderRadius: RADIUS.lg,
+  },
+  cardStrong: {
+    backgroundColor: 'rgba(5, 11, 34, 0.72)',
+    borderColor: COLORS.border,
+    borderWidth: 1,
+    borderRadius: RADIUS.lg,
+  },
+  input: {
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: COLORS.border,
+    borderWidth: 1,
+    borderRadius: RADIUS.md,
+    color: COLORS.textPrimary,
   },
 } as const;

@@ -1,58 +1,79 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, FlatList, StyleSheet, Text, View } from 'react-native';
-
-import Header from '@/components/Header';
-import { COLORS } from '@/constants/colors';
-import { GUTTER, RADIUS, SHADOW } from '@/constants/theme';
 import {
+  Alert,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+
+import GlassCard from '@/components/GlassCard';
+import Header from '@/components/Header';
+import { EmptyState, LoadingState } from '@/components/EmptyState';
+import StatusPill from '@/components/StatusPill';
+import { COLORS } from '@/constants/colors';
+import { GUTTER, RADIUS, SPACING } from '@/constants/theme';
+import {
+  correctAttendance,
+  deleteAttendance,
   getAttendanceHistory,
-  getTeacherEventAttendance,
-  type AttendanceRecord,
-  type TeacherEventAttendance,
+  getEventAttendance,
+  watchAttendance,
+  type AttendanceStatus,
+  type EventAttendance,
+  type StudentAttendanceRecord,
 } from '@/lib/attendance';
 import { useAuth } from '@/lib/auth';
-import { getProfile, type Role } from '@/lib/profiles';
+import { canViewAllAttendance, isStaff, useRole } from '@/lib/roles';
 
-function shortId(id: string) {
-  return id ? `…${id.slice(-8)}` : 'unknown';
-}
-
-function formatDate(iso: string | null) {
+function formatDateTime(iso: string | null) {
   if (!iso) return 'N/A';
-  return new Date(iso).toLocaleString();
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'N/A';
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
+
+const STATUS_TONE: Record<AttendanceStatus, 'present' | 'late' | 'absent'> = {
+  present: 'present',
+  late: 'late',
+  absent: 'absent',
+};
 
 export default function HistoryScreen() {
   const { user } = useAuth();
-  const [role, setRole] = useState<Role | null>(null);
-  const [studentRecords, setStudentRecords] = useState<AttendanceRecord[]>([]);
-  const [teacherEvents, setTeacherEvents] = useState<TeacherEventAttendance[]>([]);
+  const { role, loading: roleLoading } = useRole(user?.id);
+
+  const [studentRecords, setStudentRecords] = useState<StudentAttendanceRecord[]>([]);
+  const [eventRecords, setEventRecords] = useState<EventAttendance[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
-    if (!user) {
-      setLoading(false);
-      return;
-    }
-
+    if (!user || !role) return;
     setLoading(true);
-    const profile = await getProfile(user.id);
-    const currentRole = profile?.role ?? 'student';
-    setRole(currentRole);
 
-    if (currentRole === 'teacher') {
-      const events = await getTeacherEventAttendance(user.id);
-      setTeacherEvents(events);
+    if (isStaff(role)) {
+      const rows = await getEventAttendance(canViewAllAttendance(role) ? null : user.id);
+      setEventRecords(rows);
       setStudentRecords([]);
     } else {
-      const records = await getAttendanceHistory(user.id);
-      setStudentRecords(records);
-      setTeacherEvents([]);
+      const rows = await getAttendanceHistory(user.id);
+      setStudentRecords(rows);
+      setEventRecords([]);
     }
 
     setLoading(false);
-  }, [user]);
+  }, [user, role]);
 
   useFocusEffect(
     useCallback(() => {
@@ -60,180 +81,260 @@ export default function HistoryScreen() {
     }, [load])
   );
 
-  return (
-    <View style={styles.container}>
-      <Header title="Attendance History" />
+  // Realtime: INSERT/UPDATE/DELETE on attendance → records refresh live
+  useFocusEffect(
+    useCallback(() => {
+      if (!role || !isStaff(role)) return;
+      const unsubscribe = watchAttendance(() => {
+        load();
+      });
+      return unsubscribe;
+    }, [role, load])
+  );
 
-      {loading ? (
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-          <Text style={styles.loadingText}>Loading history...</Text>
-        </View>
-      ) : role === 'teacher' ? (
-        teacherEvents.length === 0 ? (
-          <Text style={styles.subtitle}>
-            No events created yet. Go to the Teacher tab to create an event.
-          </Text>
-        ) : (
-          <FlatList
-            data={teacherEvents}
-            keyExtractor={(item) => item.eventId}
-            contentContainerStyle={styles.list}
-            renderItem={({ item }) => (
-              <View style={styles.card}>
-                <View style={styles.cardHeader}>
-                  <Text style={styles.eventTitle}>{item.title}</Text>
-                  <View style={styles.badge}>
-                    <Text style={styles.badgeText}>
-                      {item.attendeeCount} {item.attendeeCount === 1 ? 'Attendee' : 'Attendees'}
-                    </Text>
-                  </View>
-                </View>
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }, [load]);
 
-                <Text style={styles.eventMeta}>Code: {item.eventCode}</Text>
-                {item.startTime ? (
-                  <Text style={styles.eventMeta}>Start: {formatDate(item.startTime)}</Text>
-                ) : null}
+  // Admin: correct an attendance record's status
+  const handleCorrect = async (attendanceId: string, status: AttendanceStatus) => {
+    const { error } = await correctAttendance(attendanceId, status);
+    if (error) Alert.alert('Update failed', error);
+    else load();
+  };
 
-                <View style={styles.divider} />
+  // Admin: delete an incorrect record
+  const handleDelete = (attendanceId: string) => {
+    Alert.alert('Delete record?', 'This attendance record will be permanently removed.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          const { error } = await deleteAttendance(attendanceId);
+          if (error) Alert.alert('Delete failed', error);
+          else load();
+        },
+      },
+    ]);
+  };
 
-                <Text style={styles.sectionLabel}>Students Scanned:</Text>
-                {item.attendees.length === 0 ? (
-                  <Text style={styles.emptyAttendeesText}>No attendance recorded yet.</Text>
-                ) : (
-                  item.attendees.map((attendee, index) => (
-                    <View key={`${attendee.studentId}-${index}`} style={styles.attendeeRow}>
-                      <Text style={styles.studentIdText}>
-                        Student ID: {shortId(attendee.studentId)}
-                      </Text>
-                      <Text style={styles.scannedAtText}>
-                        {formatDate(attendee.scannedAt)}
-                      </Text>
-                    </View>
-                  ))
-                )}
-              </View>
-            )}
-          />
-        )
-      ) : studentRecords.length === 0 ? (
-        <Text style={styles.subtitle}>
-          No records yet. Scan a QR code to register your attendance.
-        </Text>
-      ) : (
+  if (loading && !roleLoading) {
+    return (
+      <View style={styles.container}>
+        <Header title="Attendance Records" />
+        <LoadingState label="Loading records…" />
+      </View>
+    );
+  }
+
+  const isAdmin = role === 'admin';
+
+  // ── STUDENT: personal attendance history ──────────────────────────────
+  if (!isStaff(role)) {
+    return (
+      <View style={styles.container}>
+        <Header title="My Attendance" subtitle="Your personal check-in history" />
         <FlatList
           data={studentRecords}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.list}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={COLORS.accent}
+            />
+          }
+          ListEmptyComponent={
+            <EmptyState
+              icon="qr-code-outline"
+              title="No attendance yet"
+              message="Scan an event QR code and your attendance will appear here."
+            />
+          }
           renderItem={({ item }) => (
-            <View style={styles.card}>
-              <Text style={styles.eventTitle}>{item.eventTitle}</Text>
-              <Text style={styles.eventMeta}>Event Code: {item.eventId}</Text>
-              <Text style={styles.eventMeta}>Scanned: {formatDate(item.scannedAt)}</Text>
-            </View>
+            <GlassCard style={styles.card}>
+              <View style={styles.cardTop}>
+                <Text style={styles.eventTitle}>{item.eventTitle}</Text>
+                <StatusPill label={item.status} tone={STATUS_TONE[item.status]} small />
+              </View>
+              <Text style={styles.meta}>🎫 {item.eventCode}</Text>
+              {item.venue ? <Text style={styles.meta}>📍 {item.venue}</Text> : null}
+              <View style={styles.divider} />
+              <View style={styles.timeRow}>
+                <Text style={styles.timeLabel}>Checked in</Text>
+                <Text style={styles.timeValue}>{formatDateTime(item.recordedAt)}</Text>
+              </View>
+            </GlassCard>
           )}
         />
-      )}
+      </View>
+    );
+  }
+
+  // ── TEACHER / ADMIN: per-event attendance monitor ─────────────────────
+  return (
+    <View style={styles.container}>
+      <Header
+        title={isAdmin ? 'All Attendance' : 'My Events’ Attendance'}
+        subtitle={isAdmin ? 'System-wide records — correct or remove rows' : 'Live monitor'}
+      />
+      <FlatList
+        data={eventRecords}
+        keyExtractor={(item) => item.eventId}
+        contentContainerStyle={styles.list}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
+        }
+        ListEmptyComponent={
+          <EmptyState
+            icon="calendar-outline"
+            title="No events yet"
+            message={
+              isAdmin
+                ? 'No events have been created in the system.'
+                : 'Create an event in the Events tab to start monitoring attendance.'
+            }
+          />
+        }
+        renderItem={({ item }) => (
+          <GlassCard style={styles.card}>
+            <View style={styles.cardTop}>
+              <Text style={styles.eventTitle}>{item.title}</Text>
+              <StatusPill
+                label={item.attendeeCount === 1 ? '1 present' : `${item.attendeeCount} present`}
+                tone="open"
+                small
+              />
+            </View>
+            <Text style={styles.meta}>🎫 {item.eventCode}</Text>
+            {item.venue ? <Text style={styles.meta}>📍 {item.venue}</Text> : null}
+            <Text style={styles.meta}>🕒 {formatDateTime(item.startTime)}</Text>
+            <View style={styles.divider} />
+
+            {item.attendees.length === 0 ? (
+              <Text style={styles.emptyAttendees}>No check-ins recorded yet.</Text>
+            ) : (
+              item.attendees.map((attendee) => (
+                <View key={attendee.attendanceId}>
+                  <View style={styles.attendeeRow}>
+                    <View style={styles.attendeeInfo}>
+                      <Text style={styles.attendeeName}>{attendee.studentName}</Text>
+                      <Text style={styles.attendeeTime}>{formatDateTime(attendee.recordedAt)}</Text>
+                    </View>
+                    <StatusPill label={attendee.status} tone={STATUS_TONE[attendee.status]} small />
+                  </View>
+
+                  {/* Admin correction controls (CRUD on attendance rows) */}
+                  {isAdmin ? (
+                    <View style={styles.correctionRow}>
+                      {(['present', 'late', 'absent'] as AttendanceStatus[]).map((s) => (
+                        <Pressable
+                          key={s}
+                          style={[styles.correctChip, attendee.status === s && styles.correctChipActive]}
+                          onPress={() => handleCorrect(attendee.attendanceId, s)}
+                        >
+                          <Text
+                            style={[
+                              styles.correctChipText,
+                              attendee.status === s && styles.correctChipTextActive,
+                            ]}
+                          >
+                            {s}
+                          </Text>
+                        </Pressable>
+                      ))}
+                      <Pressable
+                        style={styles.deleteChip}
+                        onPress={() => handleDelete(attendee.attendanceId)}
+                      >
+                        <Ionicons name="trash-outline" size={14} color="#FF8F93" />
+                      </Pressable>
+                    </View>
+                  ) : null}
+                </View>
+              ))
+            )}
+          </GlassCard>
+        )}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-  centered: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: COLORS.textSecondary,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: COLORS.textSecondary,
-    textAlign: 'center',
-    lineHeight: 20,
-    marginTop: 32,
-    paddingHorizontal: 24,
-  },
-  list: {
-    paddingHorizontal: GUTTER,
-    paddingTop: 16,
-    paddingBottom: 24,
-  },
-  card: {
-    backgroundColor: COLORS.card,
-    borderRadius: RADIUS.lg,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: 16,
-    marginBottom: 12,
-    ...SHADOW.card,
-  },
-  cardHeader: {
+  container: { flex: 1, backgroundColor: 'transparent' },
+  list: { paddingHorizontal: GUTTER, paddingBottom: SPACING.xxxl },
+  card: { marginBottom: SPACING.md },
+  cardTop: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 6,
+    justifyContent: 'space-between',
+    gap: SPACING.sm,
+    marginBottom: 4,
   },
-  eventTitle: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.textPrimary,
-    marginRight: 8,
-  },
-  badge: {
-    backgroundColor: COLORS.primaryTint,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: RADIUS.pill,
-  },
-  badgeText: {
+  eventTitle: { flex: 1, fontSize: 16, fontWeight: '800', color: COLORS.textPrimary },
+  meta: { fontSize: 13, color: COLORS.textSecondary, marginTop: 2 },
+  divider: { height: 1, backgroundColor: COLORS.border, marginVertical: SPACING.md },
+  timeRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  timeLabel: {
     fontSize: 12,
     fontWeight: '700',
-    color: COLORS.primaryDark,
-  },
-  eventMeta: {
-    fontSize: 13,
-    color: COLORS.textSecondary,
-    marginTop: 2,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: COLORS.border,
-    marginVertical: 12,
-  },
-  sectionLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     textTransform: 'uppercase',
-    marginBottom: 8,
+    letterSpacing: 0.4,
   },
-  emptyAttendeesText: {
+  timeValue: { fontSize: 13, fontWeight: '600', color: COLORS.textPrimary },
+  emptyAttendees: {
     fontSize: 13,
-    color: COLORS.textSecondary,
+    color: COLORS.textMuted,
     fontStyle: 'italic',
   },
   attendeeRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: SPACING.sm,
+    paddingVertical: 6,
+  },
+  attendeeInfo: { flex: 1 },
+  attendeeName: { fontSize: 14, fontWeight: '700', color: COLORS.textPrimary },
+  attendeeTime: { fontSize: 12, color: COLORS.textSecondary, marginTop: 1 },
+  correctionRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 8,
+    marginTop: 2,
+  },
+  correctChip: {
+    borderRadius: RADIUS.pill,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    paddingHorizontal: 10,
     paddingVertical: 4,
   },
-  studentIdText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.textPrimary,
+  correctChipActive: {
+    backgroundColor: 'rgba(76, 121, 255, 0.22)',
+    borderColor: COLORS.accent,
   },
-  scannedAtText: {
-    fontSize: 12,
+  correctChipText: {
+    fontSize: 11,
+    fontWeight: '700',
     color: COLORS.textSecondary,
+    textTransform: 'uppercase',
+  },
+  correctChipTextActive: { color: COLORS.textPrimary },
+  deleteChip: {
+    marginLeft: 'auto',
+    borderRadius: RADIUS.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(189, 27, 32, 0.55)',
+    backgroundColor: 'rgba(189, 27, 32, 0.18)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
 });

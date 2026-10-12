@@ -1,5 +1,13 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 
 import { COLORS } from '@/constants/colors';
 import { RADIUS, SHADOW, SPACING } from '@/constants/theme';
@@ -8,21 +16,30 @@ type Variant = 'primary' | 'secondary' | 'danger' | 'ghost';
 
 type Props = {
   title: string;
-  icon?: keyof typeof Ionicons.glyphMap; // Made icon optional
+  icon?: keyof typeof Ionicons.glyphMap;
   theme?: Variant;
   onPress: () => void;
   disabled?: boolean;
+  loading?: boolean;
   style?: StyleProp<ViewStyle>;
 };
 
-export default function AppButton({ title, icon, theme, onPress, disabled, style }: Props) {
+export default function AppButton({
+  title,
+  icon,
+  theme,
+  onPress,
+  disabled,
+  loading = false,
+  style,
+}: Props) {
   const variant: Variant = theme ?? 'secondary';
 
   const iconColor =
     variant === 'primary' || variant === 'danger'
       ? COLORS.textOnPrimary
       : variant === 'ghost'
-        ? COLORS.primary
+        ? COLORS.accent
         : COLORS.textPrimary;
 
   return (
@@ -35,17 +52,25 @@ export default function AppButton({ title, icon, theme, onPress, disabled, style
           variant === 'danger' && styles.dangerFill,
           variant === 'ghost' && styles.ghostFill,
           pressed && styles.pressed,
-          disabled && styles.disabled,
+          (disabled || loading) && styles.disabled,
         ]}
         onPress={onPress}
-        disabled={disabled}
+        disabled={disabled || loading}
         android_ripple={
           variant === 'ghost' || variant === 'secondary'
-            ? { color: COLORS.primaryTint }
-            : { color: 'rgba(255,255,255,0.2)' }
+            ? { color: 'rgba(76, 121, 255, 0.35)' }
+            : { color: 'rgba(255,255,255,0.25)' }
         }
       >
-        {icon && <Ionicons name={icon} size={20} color={iconColor} style={styles.icon} />}
+        {loading ? (
+          <ActivityIndicator
+            size="small"
+            color={variant === 'secondary' ? COLORS.accent : COLORS.textOnPrimary}
+            style={styles.icon}
+          />
+        ) : (
+          icon && <Ionicons name={icon} size={20} color={iconColor} style={styles.icon} />
+        )}
         <Text
           style={[
             styles.label,
@@ -79,16 +104,17 @@ const styles = StyleSheet.create({
   },
   primaryFill: {
     backgroundColor: COLORS.primary,
-    borderColor: COLORS.primary,
+    borderColor: 'rgba(255, 255, 255, 0.22)',
     ...SHADOW.card,
   },
   secondaryFill: {
-    backgroundColor: COLORS.card,
+    backgroundColor: 'rgba(255, 255, 255, 0.07)',
     borderColor: COLORS.border,
   },
   dangerFill: {
-    backgroundColor: COLORS.danger,
-    borderColor: COLORS.danger,
+    backgroundColor: COLORS.crimson,
+    borderColor: 'rgba(255, 255, 255, 0.20)',
+    ...SHADOW.card,
   },
   ghostFill: {
     backgroundColor: 'transparent',
@@ -121,6 +147,6 @@ const styles = StyleSheet.create({
   },
   ghostLabel: {
     fontWeight: '600',
-    color: COLORS.primary,
+    color: COLORS.accent,
   },
 });

@@ -1,71 +1,184 @@
 import { supabase } from './supabase';
 
-export type Event = {
-  eventId: string; // public event code (e.g. EVT-2026-0002)
-  title: string;
-  start: string;
-  end: string;
-};
+export type EventStatus = 'open' | 'closed';
 
+/** Row shape of the public `events` table. */
 export type CloudEvent = {
   id: string;
   event_code: string;
   title: string;
-  start_time: string | null;
-  end_time: string | null;
+  event_date: string | null; // YYYY-MM-DD
+  start_time: string | null; // ISO timestamp
+  end_time: string | null; // ISO timestamp
+  venue: string | null;
+  description: string | null;
+  status: EventStatus;
   created_by: string | null;
   created_at: string;
 };
 
+export type EventInput = {
+  title: string;
+  eventCode: string;
+  venue: string;
+  description: string;
+  eventDate: string; // YYYY-MM-DD
+  startsAtISO: string;
+  endsAtISO: string;
+};
+
+function mapWriteError(message: string, code?: string): string {
+  if (code === '23505') return 'That event code already exists. Pick a different one.';
+  if (code === '42501') return 'You are not authorized to manage events.';
+  if (code === '23514') return 'Event failed a database constraint. Check your inputs.';
+  return message;
+}
+
+/** Create an event (teacher/admin). RLS forces created_by = current user. */
 export async function createEvent(
-  event: Event
-): Promise<{ error: string | null }> {
+  input: EventInput
+): Promise<{ event: CloudEvent | null; error: string | null }> {
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const { error } = await supabase.from('events').upsert(
-    {
-      event_code: event.eventId,
-      title: event.title,
-      start_time: event.start || null,
-      end_time: event.end || null,
-      created_by: user?.id ?? null,
-    },
-    { onConflict: 'event_code' }
-  );
-
-  return { error: error?.message ?? null };
-}
-
-export async function getEventsByTeacher(
-  teacherId: string
-): Promise<CloudEvent[]> {
   const { data, error } = await supabase
     .from('events')
+    .insert([
+      {
+        event_code: input.eventCode.trim().toUpperCase(),
+        title: input.title.trim(),
+        event_date: input.eventDate,
+        start_time: input.startsAtISO,
+        end_time: input.endsAtISO,
+        venue: input.venue.trim(),
+        description: input.description.trim() || null,
+        status: 'open' as EventStatus,
+        created_by: user?.id ?? null,
+      },
+    ])
     .select('*')
-    .eq('created_by', teacherId)
-    .order('created_at', { ascending: false });
+    .single();
 
   if (error || !data) {
-    return [];
+    return {
+      event: null,
+      error: mapWriteError(error?.message ?? 'Could not create the event.', error?.code),
+    };
   }
 
+  return { event: data as CloudEvent, error: null };
+}
+
+/** Edit an event's details (owner teacher or admin — enforced by RLS). */
+export async function updateEvent(
+  eventId: string,
+  patch: Partial<EventInput> & { status?: EventStatus }
+): Promise<{ error: string | null }> {
+  const payload: Record<string, unknown> = {};
+  if (patch.title !== undefined) payload.title = patch.title.trim();
+  if (patch.eventCode !== undefined) payload.event_code = patch.eventCode.trim().toUpperCase();
+  if (patch.venue !== undefined) payload.venue = patch.venue.trim();
+  if (patch.description !== undefined) payload.description = patch.description.trim() || null;
+  if (patch.eventDate !== undefined) payload.event_date = patch.eventDate;
+  if (patch.startsAtISO !== undefined) payload.start_time = patch.startsAtISO;
+  if (patch.endsAtISO !== undefined) payload.end_time = patch.endsAtISO;
+  if (patch.status !== undefined) payload.status = patch.status;
+
+  const { error } = await supabase.from('events').update(payload).eq('id', eventId);
+
+  if (error) return { error: mapWriteError(error.message, error.code) };
+  return { error: null };
+}
+
+/** Close or reopen an event — this is what blocks attendance when closed. */
+export async function setEventStatus(
+  eventId: string,
+  status: EventStatus
+): Promise<{ error: string | null }> {
+  const { error } = await supabase.from('events').update({ status }).eq('id', eventId);
+  if (error) return { error: mapWriteError(error.message, error.code) };
+  return { error: null };
+}
+
+/** Delete an event (owner or admin — RLS decides). Attendance cascades. */
+export async function deleteEvent(eventId: string): Promise<{ error: string | null }> {
+  const { error } = await supabase.from('events').delete().eq('id', eventId);
+  if (error) return { error: mapWriteError(error.message, error.code) };
+  return { error: null };
+}
+
+export type ListEventsOptions = {
+  /** Teacher: only their events. Admin: omit to get every event. */
+  createdBy?: string | null;
+  status?: EventStatus | null;
+  limit?: number;
+};
+
+/** List events with optional ownership/status filters (all roles can read). */
+export async function listEvents(options: ListEventsOptions = {}): Promise<CloudEvent[]> {
+  let query = supabase
+    .from('events')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (options.createdBy) query = query.eq('created_by', options.createdBy);
+  if (options.status) query = query.eq('status', options.status);
+  if (options.limit) query = query.limit(options.limit);
+
+  const { data, error } = await query;
+  if (error || !data) return [];
   return data as CloudEvent[];
 }
 
-export async function getEventByCode(
-  code: string
-): Promise<CloudEvent | null> {
+export async function getEventByCode(code: string): Promise<CloudEvent | null> {
   const { data, error } = await supabase
     .from('events')
     .select('*')
-    .eq('event_code', code)
+    .eq('event_code', code.trim().toUpperCase())
     .maybeSingle();
 
-  if (error || !data) {
-    return null;
-  }
-
+  if (error || !data) return null;
   return data as CloudEvent;
+}
+
+export async function getEventById(id: string): Promise<CloudEvent | null> {
+  const { data, error } = await supabase
+    .from('events')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return data as CloudEvent;
+}
+
+/** Auto-generated event code, e.g. EVT-2026-4F2K. */
+export function generateEventCode(): string {
+  const year = new Date().getFullYear();
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let suffix = '';
+  for (let i = 0; i < 4; i += 1) {
+    suffix += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return `EVT-${year}-${suffix}`;
+}
+
+/**
+ * Realtime: fires whenever any event row is inserted/updated/deleted
+ * (e.g. a teacher closes an event → open lists refresh live).
+ */
+export function watchEvents(onChange: () => void): () => void {
+  const channel = supabase
+    .channel(`events-watch-${Math.random().toString(36).slice(2, 8)}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'events' }, () => onChange())
+    .subscribe();
+
+  return () => {
+    try {
+      supabase.removeChannel(channel);
+    } catch {
+      // channel already removed
+    }
+  };
 }

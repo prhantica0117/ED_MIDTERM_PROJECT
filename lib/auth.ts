@@ -66,7 +66,10 @@ export async function signIn(email: string, password: string) {
 }
 
 /**
- * Register new user and set custom metadata (full_name, role)
+ * Register new user and set custom metadata (full_name, role).
+ * A database trigger copies this metadata into `profiles` on sign-up.
+ * NOTE: registration only offers student/teacher — administrator accounts
+ * are promoted by an existing admin (or seeded via SQL).
  */
 export async function signUp(
   email: string,

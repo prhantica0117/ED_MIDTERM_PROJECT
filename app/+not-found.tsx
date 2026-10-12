@@ -1,69 +1,53 @@
-import { View, StyleSheet, Text } from 'react-native';
-import { Link, Stack } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
+import { Link } from 'expo-router';
+import { StyleSheet, Text, View } from 'react-native';
 
+import GlassCard from '@/components/GlassCard';
 import { COLORS } from '@/constants/colors';
-import { GUTTER, RADIUS, SPACING } from '@/constants/theme';
+import { GUTTER, SPACING } from '@/constants/theme';
 
 export default function NotFoundScreen() {
   return (
-    <>
-      <Stack.Screen options={{ title: 'Oops! Not Found' }} />
-      <View style={styles.container}>
-        <View style={styles.iconCircle}>
-          <MaterialIcons name="search-off" size={48} color={COLORS.primary} />
-        </View>
+    <View style={styles.container}>
+      <GlassCard style={styles.card}>
+        <MaterialIcons name="explore-off" size={48} color={COLORS.accent} />
         <Text style={styles.title}>Page not found</Text>
-        <Text style={styles.subtitle}>
-          The screen you're looking for doesn't exist or has moved.
-        </Text>
-        <Link href="/" style={styles.button}>
-          Go back to Home
+        <Text style={styles.text}>The screen you are looking for does not exist.</Text>
+        <Link href="/(tabs)" style={styles.link}>
+          Go to Home
         </Link>
-      </View>
-    </>
+      </GlassCard>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: 'transparent',
     justifyContent: 'center',
-    alignItems: 'center',
     paddingHorizontal: GUTTER,
   },
-  iconCircle: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: COLORS.primaryTint,
-    justifyContent: 'center',
+  card: {
     alignItems: 'center',
-    marginBottom: SPACING.xxl,
+    padding: SPACING.xxl,
   },
   title: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '700',
     color: COLORS.textPrimary,
-    marginBottom: SPACING.sm,
-    textAlign: 'center',
+    marginTop: SPACING.md,
+    marginBottom: SPACING.xs,
   },
-  subtitle: {
-    fontSize: 15,
+  text: {
+    fontSize: 14,
     color: COLORS.textSecondary,
     textAlign: 'center',
-    lineHeight: 21,
-    marginBottom: SPACING.xxl,
+    marginBottom: SPACING.lg,
   },
-  button: {
-    fontSize: 16,
+  link: {
+    fontSize: 15,
     fontWeight: '700',
-    color: COLORS.textOnPrimary,
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: SPACING.xxl,
-    paddingVertical: SPACING.md,
-    borderRadius: RADIUS.md,
-    overflow: 'hidden',
+    color: COLORS.accent,
   },
 });

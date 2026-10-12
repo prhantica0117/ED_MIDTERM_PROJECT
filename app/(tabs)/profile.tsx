@@ -1,8 +1,7 @@
-// app/(tabs)/profile.tsx
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   Platform,
   Pressable,
@@ -14,11 +13,16 @@ import {
 } from 'react-native';
 
 import AppButton from '@/components/AppButton';
+import { LoadingState } from '@/components/EmptyState';
+import GlassCard from '@/components/GlassCard';
 import Header from '@/components/Header';
+import StatusPill from '@/components/StatusPill';
 import { COLORS } from '@/constants/colors';
-import { GUTTER, RADIUS, SHADOW, SPACING } from '@/constants/theme';
+import { GUTTER, RADIUS, SPACING } from '@/constants/theme';
 import { signOut, useAuth } from '@/lib/auth';
 import { getProfile, updateProfile, type Profile } from '@/lib/profiles';
+import { ROLE_LABEL } from '@/lib/roles';
+import { validateName } from '@/lib/validation';
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -40,23 +44,16 @@ export default function ProfileScreen() {
           if (isMounted) setLoading(false);
           return;
         }
-
         if (isMounted) setLoading(true);
-        try {
-          const p = await getProfile(user.id);
-          if (isMounted) {
-            setProfile(p);
-            setDraftName(p?.full_name ?? '');
-          }
-        } catch (err) {
-          console.error('Error fetching profile:', err);
-        } finally {
-          if (isMounted) setLoading(false);
+        const p = await getProfile(user.id);
+        if (isMounted) {
+          setProfile(p);
+          setDraftName(p?.full_name ?? '');
+          setLoading(false);
         }
       };
 
       fetchProfile();
-
       return () => {
         isMounted = false;
       };
@@ -65,33 +62,31 @@ export default function ProfileScreen() {
 
   const handleSaveName = async () => {
     if (!user) return;
-    setSaving(true);
-    try {
-      const { error } = await updateProfile(user.id, {
-        full_name: draftName.trim(),
-      });
 
-      if (error) {
-        Alert.alert('Error', error);
-      } else {
-        setProfile((prev) =>
-          prev ? { ...prev, full_name: draftName.trim() } : prev
-        );
-        setEditing(false);
-      }
-    } catch (err: any) {
-      Alert.alert('Error', err?.message || 'Failed to update name.');
-    } finally {
-      setSaving(false);
+    const nameError = validateName(draftName, 'Name');
+    if (nameError) {
+      Alert.alert('Invalid name', nameError);
+      return;
+    }
+
+    setSaving(true);
+    const { error } = await updateProfile(user.id, { full_name: draftName.trim() });
+    setSaving(false);
+
+    if (error) {
+      Alert.alert('Error', error);
+    } else {
+      setProfile((prev) => (prev ? { ...prev, full_name: draftName.trim() } : prev));
+      setEditing(false);
     }
   };
 
+  // Event: "Sign Out" pressed → invalidate session → redirect to login
   const handleSignOut = async () => {
     if (signingOut) return;
     setSigningOut(true);
     try {
       await signOut();
-      // Force immediate redirect to login screen
       router.replace('/login');
     } catch (err: any) {
       Alert.alert('Sign Out Error', err?.message || 'Failed to sign out.');
@@ -99,63 +94,57 @@ export default function ProfileScreen() {
     }
   };
 
-  if (loading && !profile) {
+  if (loading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
+      <View style={styles.container}>
+        <Header title="My Profile" />
+        <LoadingState label="Loading profile…" />
       </View>
     );
   }
 
+  const tone =
+    profile?.role === 'admin' ? 'admin' : profile?.role === 'teacher' ? 'teacher' : 'student';
+
   return (
     <View style={styles.container}>
-      <Header title="My Profile" />
+      <Header title="My Profile" subtitle="Account details and settings" />
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.badgeRow}>
-          {profile?.role === 'teacher' ? (
-            <View style={styles.roleBadge}>
-              <Text style={styles.roleBadgeText}>Teacher</Text>
-            </View>
-          ) : (
-            <View style={[styles.roleBadge, styles.roleBadgeStudent]}>
-              <Text style={[styles.roleBadgeText, styles.roleBadgeStudentText]}>Student</Text>
-            </View>
-          )}
-        </View>
+        <GlassCard style={styles.hero}>
+          <View style={styles.avatar}>
+            <Ionicons name="person" size={34} color={COLORS.textOnPrimary} />
+          </View>
+          <Text style={styles.heroName}>{profile?.full_name ?? 'Unnamed user'}</Text>
+          <Text style={styles.heroEmail}>{user?.email ?? 'N/A'}</Text>
+          <StatusPill label={profile ? ROLE_LABEL[profile.role] : '—'} tone={tone} />
+        </GlassCard>
 
-        <View style={styles.card}>
+        <GlassCard style={styles.infoCard}>
           <Text style={styles.label}>Full Name</Text>
           {editing ? (
-            <View style={styles.nameEditRow}>
+            <View style={styles.editRow}>
               <TextInput
                 style={styles.input}
                 value={draftName}
                 onChangeText={setDraftName}
-                placeholder="Enter your name"
-                placeholderTextColor={COLORS.textSecondary}
-                autoFocus
+                placeholder="Your full name"
+                placeholderTextColor={COLORS.textMuted}
+                autoCapitalize="words"
               />
-              <Pressable
-                onPress={handleSaveName}
-                disabled={saving}
-                style={styles.saveButton}
-              >
-                {saving ? (
-                  <ActivityIndicator size="small" color={COLORS.textOnPrimary} />
-                ) : (
-                  <Text style={styles.saveButtonText}>Save</Text>
-                )}
+              <Pressable style={styles.saveButton} onPress={handleSaveName} disabled={saving}>
+                <Text style={styles.saveButtonText}>{saving ? '…' : 'Save'}</Text>
+              </Pressable>
+              <Pressable style={styles.cancelButton} onPress={() => setEditing(false)}>
+                <Text style={styles.cancelButtonText}>✕</Text>
               </Pressable>
             </View>
           ) : (
-            <Pressable onPress={() => setEditing(true)} style={styles.nameRow}>
-              <Text style={styles.value}>
-                {profile?.full_name || 'Tap to add your name'}
-              </Text>
+            <Pressable onPress={() => setEditing(true)} style={styles.valueRow}>
+              <Text style={styles.value}>{profile?.full_name || 'Tap to add your name'}</Text>
               <Text style={styles.editHint}>Edit</Text>
             </Pressable>
           )}
@@ -167,16 +156,22 @@ export default function ProfileScreen() {
 
           <View style={styles.divider} />
 
+          <Text style={styles.label}>Role</Text>
+          <Text style={styles.value}>{profile ? ROLE_LABEL[profile.role] : 'N/A'}</Text>
+
+          <View style={styles.divider} />
+
           <Text style={styles.label}>User ID</Text>
           <Text style={styles.idValue}>{user?.id ?? 'N/A'}</Text>
-        </View>
+        </GlassCard>
 
-        <View style={styles.actionContainer}>
+        <View style={styles.actions}>
           <AppButton
             theme="danger"
-            title="Sign Out"
+            title={signingOut ? 'Signing Out…' : 'Sign Out'}
             icon="log-out-outline"
             onPress={handleSignOut}
+            loading={signingOut}
           />
         </View>
       </ScrollView>
@@ -185,114 +180,96 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-  },
-  centered: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: COLORS.background,
-  },
-  scrollContent: {
+  container: { flex: 1, backgroundColor: 'transparent' },
+  scroll: {
     flexGrow: 1,
     paddingHorizontal: GUTTER,
-    paddingTop: SPACING.lg,
     paddingBottom: SPACING.xxxl,
   },
-  badgeRow: {
+  hero: {
     alignItems: 'center',
-    marginBottom: 20,
+    padding: SPACING.xl,
+    marginBottom: SPACING.lg,
   },
-  roleBadge: {
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  roleBadgeStudent: {
-    backgroundColor: COLORS.primaryTint,
-  },
-  roleBadgeText: {
-    color: COLORS.textOnPrimary,
-    fontWeight: '700',
-    fontSize: 14,
-    textTransform: 'uppercase',
-  },
-  roleBadgeStudentText: {
-    color: COLORS.primaryDark,
-  },
-  card: {
-    backgroundColor: COLORS.card,
-    borderRadius: RADIUS.lg,
+  avatar: {
+    width: 74,
+    height: 74,
+    borderRadius: 37,
+    backgroundColor: 'rgba(11, 48, 152, 0.55)',
     borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: 16,
-    marginBottom: 24,
-    ...SHADOW.card,
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: SPACING.md,
   },
-  label: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: COLORS.textSecondary,
-    textTransform: 'uppercase',
-    marginBottom: 4,
-  },
-  value: {
-    fontSize: 16,
-    fontWeight: '600',
+  heroName: {
+    fontSize: 19,
+    fontWeight: '800',
     color: COLORS.textPrimary,
+    marginBottom: 2,
+    textAlign: 'center',
   },
-  idValue: {
+  heroEmail: {
     fontSize: 13,
     color: COLORS.textSecondary,
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    marginBottom: SPACING.md,
   },
-  nameRow: {
+  infoCard: { padding: SPACING.lg, marginBottom: SPACING.xl },
+  label: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 4,
+  },
+  value: { fontSize: 16, fontWeight: '600', color: COLORS.textPrimary, flex: 1 },
+  valueRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'center',
   },
-  editHint: {
-    fontSize: 14,
-    color: COLORS.primary,
-    fontWeight: '600',
-  },
-  nameEditRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
+  editHint: { fontSize: 14, color: COLORS.accent, fontWeight: '700' },
+  editRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   input: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
     borderWidth: 1,
     borderColor: COLORS.border,
     borderRadius: RADIUS.md,
     paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm,
+    paddingVertical: SPACING.sm + 2,
     fontSize: 15,
     color: COLORS.textPrimary,
   },
   saveButton: {
     backgroundColor: COLORS.primary,
     borderRadius: RADIUS.md,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.22)',
   },
-  saveButtonText: {
-    color: COLORS.textOnPrimary,
-    fontWeight: '600',
-    fontSize: 14,
+  saveButtonText: { color: COLORS.textOnPrimary, fontWeight: '700', fontSize: 13 },
+  cancelButton: {
+    backgroundColor: 'rgba(189, 27, 32, 0.20)',
+    borderRadius: RADIUS.md,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(189, 27, 32, 0.55)',
+  },
+  cancelButtonText: { color: '#FF8F93', fontWeight: '700', fontSize: 13 },
+  idValue: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
   },
   divider: {
     height: 1,
     backgroundColor: COLORS.border,
-    marginVertical: 14,
+    marginVertical: SPACING.md,
   },
-  actionContainer: {
-    marginTop: 'auto',
-    marginBottom: 16,
-  },
+  actions: { marginTop: 'auto' },
 });
+
