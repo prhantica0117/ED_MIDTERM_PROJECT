@@ -1,16 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import {
-  Alert,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import AppButton from '@/components/AppButton';
 import { LoadingState } from '@/components/EmptyState';
@@ -18,21 +9,26 @@ import GlassCard from '@/components/GlassCard';
 import Header from '@/components/Header';
 import StatusPill from '@/components/StatusPill';
 import { COLORS } from '@/constants/colors';
+import { educationLabel, educationLine } from '@/constants/education';
 import { GUTTER, RADIUS, SPACING } from '@/constants/theme';
 import { signOut, useAuth } from '@/lib/auth';
-import { getProfile, updateProfile, type Profile } from '@/lib/profiles';
+import { getProfile, type Profile } from '@/lib/profiles';
 import { ROLE_LABEL } from '@/lib/roles';
-import { validateName } from '@/lib/validation';
 
+/**
+ * Profile tab — strictly read-only personal information, laid out exactly as
+ * required:
+ *   (centered) profile picture icon
+ *   Role  |  Education
+ *   FULL NAME
+ *   Student / Personnel ID
+ *   Education line — e.g. "BS Information Technology l 3rd Year l Block D"
+ */
 export default function ProfileScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-
-  const [editing, setEditing] = useState(false);
-  const [draftName, setDraftName] = useState('');
-  const [saving, setSaving] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
 
   useFocusEffect(
@@ -48,7 +44,6 @@ export default function ProfileScreen() {
         const p = await getProfile(user.id);
         if (isMounted) {
           setProfile(p);
-          setDraftName(p?.full_name ?? '');
           setLoading(false);
         }
       };
@@ -59,27 +54,6 @@ export default function ProfileScreen() {
       };
     }, [user])
   );
-
-  const handleSaveName = async () => {
-    if (!user) return;
-
-    const nameError = validateName(draftName, 'Name');
-    if (nameError) {
-      Alert.alert('Invalid name', nameError);
-      return;
-    }
-
-    setSaving(true);
-    const { error } = await updateProfile(user.id, { full_name: draftName.trim() });
-    setSaving(false);
-
-    if (error) {
-      Alert.alert('Error', error);
-    } else {
-      setProfile((prev) => (prev ? { ...prev, full_name: draftName.trim() } : prev));
-      setEditing(false);
-    }
-  };
 
   // Event: "Sign Out" pressed → invalidate session → redirect to login
   const handleSignOut = async () => {
@@ -105,52 +79,52 @@ export default function ProfileScreen() {
 
   const tone =
     profile?.role === 'admin' ? 'admin' : profile?.role === 'teacher' ? 'teacher' : 'student';
+  const levelLabel = educationLabel(profile?.education);
+  const detailLine = educationLine(profile);
 
   return (
     <View style={styles.container}>
-      <Header title="My Profile" subtitle="Account details and settings" />
+      <Header title="My Profile" subtitle="Your personal information" />
 
       <ScrollView
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
       >
+        {/* ── Centered personal information card (read-only) ─────────── */}
         <GlassCard style={styles.hero}>
           <View style={styles.avatar}>
-            <Ionicons name="person" size={34} color={COLORS.textOnPrimary} />
+            <Ionicons name="person" size={38} color={COLORS.textOnPrimary} />
           </View>
-          <Text style={styles.heroName}>{profile?.full_name ?? 'Unnamed user'}</Text>
-          <Text style={styles.heroEmail}>{user?.email ?? 'N/A'}</Text>
-          <StatusPill label={profile ? ROLE_LABEL[profile.role] : '—'} tone={tone} />
+
+          {/* Role with the Education level beside it */}
+          <View style={styles.roleRow}>
+            <StatusPill label={profile ? ROLE_LABEL[profile.role] : '—'} tone={tone} />
+            {levelLabel ? (
+              <View style={styles.eduBadge}>
+                <Ionicons name="school-outline" size={13} color={COLORS.accent} />
+                <Text style={styles.eduBadgeText}>{levelLabel}</Text>
+              </View>
+            ) : null}
+          </View>
+
+          {/* Full name */}
+          <Text style={styles.fullName}>{profile?.full_name ?? 'Unnamed user'}</Text>
+
+          {/* Student / Personnel ID */}
+          <Text style={styles.studentId}>
+            ID: {profile?.student_no || 'Not set'}
+          </Text>
+
+          {/* Education details line */}
+          {detailLine ? <Text style={styles.eduLine}>{detailLine}</Text> : null}
+
+          {profile?.is_advisory && profile?.role === 'teacher' ? (
+            <Text style={styles.advisoryNote}>Advisory Teacher</Text>
+          ) : null}
         </GlassCard>
 
+        {/* ── Additional read-only account info ──────────────────────── */}
         <GlassCard style={styles.infoCard}>
-          <Text style={styles.label}>Full Name</Text>
-          {editing ? (
-            <View style={styles.editRow}>
-              <TextInput
-                style={styles.input}
-                value={draftName}
-                onChangeText={setDraftName}
-                placeholder="Your full name"
-                placeholderTextColor={COLORS.textMuted}
-                autoCapitalize="words"
-              />
-              <Pressable style={styles.saveButton} onPress={handleSaveName} disabled={saving}>
-                <Text style={styles.saveButtonText}>{saving ? '…' : 'Save'}</Text>
-              </Pressable>
-              <Pressable style={styles.cancelButton} onPress={() => setEditing(false)}>
-                <Text style={styles.cancelButtonText}>✕</Text>
-              </Pressable>
-            </View>
-          ) : (
-            <Pressable onPress={() => setEditing(true)} style={styles.valueRow}>
-              <Text style={styles.value}>{profile?.full_name || 'Tap to add your name'}</Text>
-              <Text style={styles.editHint}>Edit</Text>
-            </Pressable>
-          )}
-
-          <View style={styles.divider} />
-
           <Text style={styles.label}>Email</Text>
           <Text style={styles.value}>{user?.email ?? 'N/A'}</Text>
 
@@ -159,10 +133,13 @@ export default function ProfileScreen() {
           <Text style={styles.label}>Role</Text>
           <Text style={styles.value}>{profile ? ROLE_LABEL[profile.role] : 'N/A'}</Text>
 
-          <View style={styles.divider} />
-
-          <Text style={styles.label}>User ID</Text>
-          <Text style={styles.idValue}>{user?.id ?? 'N/A'}</Text>
+          {profile?.role === 'teacher' && !profile?.is_advisory ? (
+            <>
+              <View style={styles.divider} />
+              <Text style={styles.label}>Advisory</Text>
+              <Text style={styles.value}>Not an advisory teacher</Text>
+            </>
+          ) : null}
         </GlassCard>
 
         <View style={styles.actions}>
@@ -192,9 +169,9 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.lg,
   },
   avatar: {
-    width: 74,
-    height: 74,
-    borderRadius: 37,
+    width: 84,
+    height: 84,
+    borderRadius: 42,
     backgroundColor: 'rgba(11, 48, 152, 0.55)',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.18)',
@@ -202,17 +179,61 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: SPACING.md,
   },
-  heroName: {
-    fontSize: 19,
+  roleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+    marginBottom: SPACING.md,
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+  },
+  eduBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: RADIUS.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(76, 121, 255, 0.40)',
+    backgroundColor: 'rgba(76, 121, 255, 0.14)',
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 5,
+  },
+  eduBadgeText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.accent,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  fullName: {
+    fontSize: 21,
     fontWeight: '800',
     color: COLORS.textPrimary,
-    marginBottom: 2,
     textAlign: 'center',
+    marginBottom: SPACING.xs,
   },
-  heroEmail: {
-    fontSize: 13,
+  studentId: {
+    fontSize: 14,
+    fontWeight: '600',
     color: COLORS.textSecondary,
-    marginBottom: SPACING.md,
+    textAlign: 'center',
+    marginBottom: SPACING.sm,
+  },
+  eduLine: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.accent,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginTop: 2,
+  },
+  advisoryNote: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#D2A78F',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginTop: SPACING.sm,
   },
   infoCard: { padding: SPACING.lg, marginBottom: SPACING.xl },
   label: {
@@ -223,48 +244,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
     marginBottom: 4,
   },
-  value: { fontSize: 16, fontWeight: '600', color: COLORS.textPrimary, flex: 1 },
-  valueRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  editHint: { fontSize: 14, color: COLORS.accent, fontWeight: '700' },
-  editRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  input: {
-    flex: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: RADIUS.md,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm + 2,
-    fontSize: 15,
-    color: COLORS.textPrimary,
-  },
-  saveButton: {
-    backgroundColor: COLORS.primary,
-    borderRadius: RADIUS.md,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.22)',
-  },
-  saveButtonText: { color: COLORS.textOnPrimary, fontWeight: '700', fontSize: 13 },
-  cancelButton: {
-    backgroundColor: 'rgba(189, 27, 32, 0.20)',
-    borderRadius: RADIUS.md,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(189, 27, 32, 0.55)',
-  },
-  cancelButtonText: { color: '#FF8F93', fontWeight: '700', fontSize: 13 },
-  idValue: {
-    fontSize: 12,
-    color: COLORS.textSecondary,
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-  },
+  value: { fontSize: 16, fontWeight: '600', color: COLORS.textPrimary },
   divider: {
     height: 1,
     backgroundColor: COLORS.border,
@@ -272,4 +252,3 @@ const styles = StyleSheet.create({
   },
   actions: { marginTop: 'auto' },
 });
-

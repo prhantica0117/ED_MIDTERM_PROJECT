@@ -1,5 +1,18 @@
-import { getEventByCode, type CloudEvent } from './events';
-import { getProfile } from './profiles';
+import {
+  eventMatchesProfile,
+  educationLabel,
+  type EventTarget,
+  type EducationInfo,
+} from '../constants/education';
+import {
+  getEventByCode,
+  listEvents,
+  parseEventTarget,
+  type CloudEvent,
+  type ScanAction,
+  type ScanWindow,
+} from './events';
+import { getProfile, listProfiles, type Profile } from './profiles';
 import { parseQRPayload } from './qr';
 import { supabase } from './supabase';
 import { toLocalDateString } from './validation';
@@ -12,6 +25,7 @@ export type ScanFailureCode =
   | 'event_missing'
   | 'closed'
   | 'not_started'
+  | 'wrong_window'
   | 'ended'
   | 'duplicate'
   | 'unauthorized'
@@ -24,6 +38,10 @@ export type ScanResult =
       event: { title: string; venue: string | null; eventCode: string };
       recordedAt: string;
       status: AttendanceStatus;
+      action: ScanAction;
+      slot: number;
+      windowStart: string;
+      windowEnd: string;
     }
   | { ok: false; code: ScanFailureCode; message: string };
 
@@ -31,15 +49,41 @@ function fail(code: ScanFailureCode, message: string): ScanResult {
   return { ok: false, code, message };
 }
 
+export function actionLabel(action: ScanAction): string {
+  return action === 'check_out' ? 'Check Out' : 'Check In';
+}
+
+export function formatClock(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+/**
+ * The ordered check-in / check-out windows of an event.
+ * Events created before scan windows existed fall back to a single check-in
+ * window spanning the event start/end times.
+ */
+export function resolveScanWindows(event: CloudEvent): ScanWindow[] {
+  if (event.scan_windows && event.scan_windows.length > 0) {
+    return [...event.scan_windows].sort((a, b) => a.slot - b.slot);
+  }
+  if (event.start_time && event.end_time) {
+    return [{ slot: 0, action: 'check_in', start: event.start_time, end: event.end_time }];
+  }
+  return [];
+}
+
 /**
  * QR attendance pipeline (event → handler → action → result):
- *  1. Parse/validate the QR payload            → invalid_qr
- *  2. Authorization: only students may record  → unauthorized
- *  3. Look the event up in the database        → event_missing (invalid QR)
- *  4. Event status must be "open"              → closed
- *  5. Current time must be inside the window   → not_started / ended
- *  6. Duplicate check (pre-query + UNIQUE)     → duplicate
- *  7. Insert row (RLS + DB trigger guard)      → success / db_error
+ *  1. Parse/validate the QR payload              → invalid_qr
+ *  2. Authorization: only students may record    → unauthorized
+ *  3. Look the event up in the database          → event_missing (invalid QR)
+ *  4. Event status must be "open"                → closed
+ *  5. Resolve the check-in / check-out windows   → not_started / wrong_window / ended
+ *  6. Duplicate check per window slot            → duplicate
+ *  7. Ensure the attendance summary row          → late if after event start
+ *  8. Insert the scan row (RLS + trigger guard)  → success / db_error
  */
 export async function registerAttendance(
   rawPayload: string,
@@ -74,55 +118,140 @@ export async function registerAttendance(
     return fail('closed', `“${event.title}” is closed. Attendance can no longer be recorded.`);
   }
 
-  // Step 5 — time window (source of truth = database, not the QR image)
+  // Step 5 — which check-in / check-out window are we in?
+  // (source of truth = the database, not the QR image)
   const now = Date.now();
-  const startMs = event.start_time ? Date.parse(event.start_time) : NaN;
-  const endMs = event.end_time ? Date.parse(event.end_time) : NaN;
+  const windows = resolveScanWindows(event);
 
-  if (!Number.isNaN(startMs) && now < startMs) {
-    return fail('not_started', `“${event.title}” has not started yet.`);
-  }
-  if (!Number.isNaN(endMs) && now > endMs) {
-    return fail('ended', `“${event.title}” has already ended.`);
+  if (windows.length === 0) {
+    return fail(
+      'not_started',
+      `“${event.title}” has no check-in schedule yet. Ask your teacher or administrator.`
+    );
   }
 
-  // Step 6 — duplicate attendance pre-check
-  const { data: existing } = await supabase
-    .from('attendance')
+  const active = windows.find((w) => now >= Date.parse(w.start) && now <= Date.parse(w.end));
+
+  if (!active) {
+    const first = windows[0];
+    const last = windows[windows.length - 1];
+
+    if (now < Date.parse(first.start)) {
+      return fail(
+        'not_started',
+        `${actionLabel(first.action)} for “${event.title}” opens at ${formatClock(first.start)}.`
+      );
+    }
+    if (now > Date.parse(last.end)) {
+      return fail(
+        'ended',
+        `Scanning for “${event.title}” is finished — the last window closed at ${formatClock(
+          last.end
+        )}.`
+      );
+    }
+    const next = windows.find((w) => now < Date.parse(w.start));
+    if (next) {
+      return fail(
+        'wrong_window',
+        `Not your turn yet — ${actionLabel(next.action)} for “${event.title}” runs from ${formatClock(
+          next.start
+        )} to ${formatClock(next.end)}.`
+      );
+    }
+    return fail('ended', `No open scanning window for “${event.title}” right now.`);
+  }
+
+  // Step 6 — duplicate check for this specific window slot
+  const { data: existingScan } = await supabase
+    .from('attendance_scans')
     .select('id')
+    .eq('student_id', studentId)
+    .eq('event_id', event.id)
+    .eq('slot', active.slot)
+    .maybeSingle();
+
+  if (existingScan) {
+    return fail(
+      'duplicate',
+      `You already ${active.action === 'check_out' ? 'checked out' : 'checked in'} for this window (${formatClock(
+        active.start
+      )} – ${formatClock(active.end)}).`
+    );
+  }
+
+  // Step 7 — attendance summary row (UNIQUE(student_id, event_id) + trigger guard)
+  let attendanceId: string;
+  let status: AttendanceStatus = 'present';
+
+  const { data: existingAttendance } = await supabase
+    .from('attendance')
+    .select('id, status')
     .eq('student_id', studentId)
     .eq('event_id', event.id)
     .maybeSingle();
 
-  if (existing) {
-    return fail('duplicate', `You already recorded attendance for “${event.title}”.`);
+  if (existingAttendance) {
+    attendanceId = existingAttendance.id;
+    status = (existingAttendance.status as AttendanceStatus) ?? 'present';
+  } else {
+    // auto-late: the first scan after the scheduled event start counts as late
+    const eventStartMs = event.start_time ? Date.parse(event.start_time) : NaN;
+    const initialStatus: AttendanceStatus =
+      !Number.isNaN(eventStartMs) && now > eventStartMs ? 'late' : 'present';
+
+    const { data: inserted, error } = await supabase
+      .from('attendance')
+      .insert([
+        {
+          student_id: studentId,
+          event_id: event.id,
+          attended_date: toLocalDateString(new Date()),
+          status: initialStatus,
+        },
+      ])
+      .select('id, recorded_at, status')
+      .single();
+
+    if (error || !inserted) {
+      if (error?.code === '23505') {
+        return fail('duplicate', `You already recorded attendance for “${event.title}”.`);
+      }
+      if (error?.code === '42501') {
+        return fail('unauthorized', 'You are not authorized to record attendance.');
+      }
+      if (error?.code === 'P0001' || /CLOSED/i.test(error?.message ?? '')) {
+        return fail('closed', `“${event.title}” is closed. Attendance can no longer be recorded.`);
+      }
+      return fail('db_error', error?.message ?? 'Could not record attendance.');
+    }
+
+    attendanceId = inserted.id;
+    status = (inserted.status as AttendanceStatus) ?? initialStatus;
   }
 
-  // Step 7 — record attendance (UNIQUE(student_id, event_id) + trigger guard)
-  const { data: inserted, error } = await supabase
-    .from('attendance')
-    .insert([
-      {
-        student_id: studentId,
-        event_id: event.id,
-        attended_date: toLocalDateString(new Date()),
-        status: 'present' as AttendanceStatus,
-      },
-    ])
-    .select('id, recorded_at, status')
-    .single();
+  // Step 8 — record the individual check-in / check-out scan for this slot
+  const { error: scanError } = await supabase.from('attendance_scans').insert([
+    {
+      attendance_id: attendanceId,
+      student_id: studentId,
+      event_id: event.id,
+      slot: active.slot,
+      action: active.action,
+    },
+  ]);
 
-  if (error || !inserted) {
-    if (error?.code === '23505') {
-      return fail('duplicate', `You already recorded attendance for “${event.title}”.`);
+  if (scanError) {
+    if (scanError.code === '23505') {
+      return fail('duplicate', `You already scanned this window for “${event.title}”.`);
     }
-    if (error?.code === '42501') {
+    if (scanError.code === '42501') {
       return fail('unauthorized', 'You are not authorized to record attendance.');
     }
-    if (error?.code === 'P0001' || /CLOSED/i.test(error?.message ?? '')) {
+    if (scanError.code === 'P0001' || /closed/i.test(scanError.message ?? '')) {
       return fail('closed', `“${event.title}” is closed. Attendance can no longer be recorded.`);
     }
-    return fail('db_error', error?.message ?? 'Could not record attendance.');
+    return fail('db_error', scanError.message ?? 'Could not record the scan.');
   }
 
   return {
@@ -132,8 +261,12 @@ export async function registerAttendance(
       venue: event.venue,
       eventCode: event.event_code,
     },
-    recordedAt: inserted.recorded_at ?? new Date().toISOString(),
-    status: (inserted.status as AttendanceStatus) ?? 'present',
+    recordedAt: new Date().toISOString(),
+    status,
+    action: active.action,
+    slot: active.slot,
+    windowStart: active.start,
+    windowEnd: active.end,
   };
 }
 
@@ -186,6 +319,7 @@ export type AttendeeRecord = {
   studentId: string;
   studentName: string;
   studentEmail: string;
+  studentNo: string | null;
   recordedAt: string;
   status: AttendanceStatus;
 };
@@ -198,17 +332,36 @@ export type EventAttendance = {
   startTime: string | null;
   endTime: string | null;
   eventStatus: string;
+  target: EventTarget | null;
+  /** How many students this event targets (denominator for rates). */
+  expected: number;
   attendeeCount: number;
   attendees: AttendeeRecord[];
 };
 
-async function fetchProfilesMapSafe(): Promise<
-  Record<string, { full_name: string | null; email: string | null }>
-> {
-  const { data } = await supabase.from('profiles').select('id, full_name, email');
-  const map: Record<string, { full_name: string | null; email: string | null }> = {};
+export type ProfilesMapEntry = {
+  full_name: string | null;
+  email: string | null;
+  student_no: string | null;
+  role: string | null;
+  education: string | null;
+  department: string | null;
+  year_level: string | null;
+  block: string | null;
+  strand: string | null;
+  grade_level: string | null;
+  section: string | null;
+};
+
+async function fetchProfilesMapSafe(): Promise<Record<string, ProfilesMapEntry>> {
+  const { data } = await supabase
+    .from('profiles')
+    .select(
+      'id, full_name, email, student_no, role, education, department, year_level, block, strand, grade_level, section'
+    );
+  const map: Record<string, ProfilesMapEntry> = {};
   (data ?? []).forEach((row: any) => {
-    map[row.id] = { full_name: row.full_name, email: row.email };
+    map[row.id] = row;
   });
   return map;
 }
@@ -221,7 +374,7 @@ async function fetchProfilesMapSafe(): Promise<
 export async function getEventAttendance(ownerId?: string | null): Promise<EventAttendance[]> {
   const { data: events, error: eventError } = await supabase
     .from('events')
-    .select('id, event_code, title, venue, start_time, end_time, status, created_by')
+    .select('id, event_code, title, venue, start_time, end_time, status, created_by, target')
     .order('created_at', { ascending: false });
 
   if (eventError || !events) return [];
@@ -243,6 +396,15 @@ export async function getEventAttendance(ownerId?: string | null): Promise<Event
   return (scoped as any[])
     .map((event) => {
       const mine = attendanceRows.filter((row: any) => row.event_id === event.id);
+      const target = parseEventTarget(event.target);
+
+      // expected = students this event targets (denominator for present/absent %)
+      const expected = Object.values(profiles).filter(
+        (p) =>
+          p.role === 'student' &&
+          eventMatchesProfile(target, { ...p, role: p.role })
+      ).length;
+
       return {
         eventId: event.id,
         eventCode: event.event_code,
@@ -251,12 +413,15 @@ export async function getEventAttendance(ownerId?: string | null): Promise<Event
         startTime: event.start_time,
         endTime: event.end_time,
         eventStatus: event.status ?? 'open',
+        target,
+        expected: Math.max(expected, mine.length),
         attendeeCount: mine.length,
         attendees: mine.map((row: any) => ({
           attendanceId: row.id,
           studentId: row.student_id,
           studentName: profiles[row.student_id]?.full_name ?? 'Unnamed student',
           studentEmail: profiles[row.student_id]?.email ?? '',
+          studentNo: profiles[row.student_id]?.student_no ?? null,
           recordedAt: row.recorded_at,
           status: (row.status as AttendanceStatus) ?? 'present',
         })),
@@ -295,6 +460,7 @@ export async function getAllAttendance(): Promise<OverallRecord[]> {
     studentId: row.student_id,
     studentName: profiles[row.student_id]?.full_name ?? 'Unnamed student',
     studentEmail: profiles[row.student_id]?.email ?? '',
+    studentNo: profiles[row.student_id]?.student_no ?? null,
     recordedAt: row.recorded_at,
     attendedDate: row.attended_date ?? null,
     status: (row.status as AttendanceStatus) ?? 'present',
@@ -444,4 +610,217 @@ export function watchAttendance(
       // channel already removed
     }
   };
+}
+
+// ============================================================
+// ATTENDANCE SUMMARIES / RATES (student history, staff reports)
+// ============================================================
+
+export type StudentStats = {
+  /** Attendance rate: attended / scheduled targeted events × 100. */
+  rate: number;
+  present: number;
+  late: number;
+  absent: number;
+  attended: number;
+  scheduled: number;
+};
+
+/**
+ * A student's personal attendance statistics:
+ *  • present/late/absent come from their attendance rows
+ *  • scheduled = events targeted at them (event target matching)
+ *  • absent    = targeted events they never attended (+ rows marked absent)
+ *  • rate      = attended / scheduled
+ */
+export async function getStudentStats(studentId: string): Promise<StudentStats> {
+  const [rowsResult, profile, events] = await Promise.all([
+    supabase.from('attendance').select('status').eq('student_id', studentId),
+    getProfile(studentId),
+    listEvents(),
+  ]);
+
+  const rows = rowsResult.data ?? [];
+  const present = rows.filter((r: any) => r.status === 'present').length;
+  const late = rows.filter((r: any) => r.status === 'late').length;
+  const absentMarked = rows.filter((r: any) => r.status === 'absent').length;
+  const attended = present + late;
+
+  const scheduled =
+    events.filter((e) => eventMatchesProfile(e.target, profile)).length || rows.length;
+  const absent = Math.max(scheduled - attended, absentMarked, 0);
+  const rate = scheduled > 0 ? Math.round((attended / scheduled) * 100) : 0;
+
+  return { rate, present, late, absent, attended, scheduled };
+}
+
+export type EventSummary = {
+  present: number;
+  late: number;
+  absent: number;
+  /** attended (present + late) — the "recorded" students */
+  recorded: number;
+  /** expected students for this event (target audience) */
+  expected: number;
+  /** present rate % = recorded / expected */
+  rate: number;
+};
+
+/** Present / late / absent counts + percentage for one event. */
+export function summarizeEvent(
+  attendees: AttendeeRecord[],
+  expected: number
+): EventSummary {
+  const present = attendees.filter((a) => a.status === 'present').length;
+  const late = attendees.filter((a) => a.status === 'late').length;
+  const recorded = present + late;
+  const denominator = Math.max(expected, attendees.length, recorded);
+  const absent = Math.max(denominator - recorded, 0);
+  const rate = denominator > 0 ? Math.round((recorded / denominator) * 100) : 0;
+  return { present, late, absent, recorded, expected: denominator, rate };
+}
+
+export type StudentScan = {
+  attendanceId: string;
+  slot: number;
+  action: ScanAction;
+  scannedAt: string;
+};
+
+/** One student's check-in / check-out timeline, grouped per attendance row. */
+export async function getStudentScans(
+  studentId: string
+): Promise<Record<string, StudentScan[]>> {
+  const { data } = await supabase
+    .from('attendance_scans')
+    .select('attendance_id, slot, action, scanned_at')
+    .eq('student_id', studentId)
+    .order('slot', { ascending: true });
+
+  const map: Record<string, StudentScan[]> = {};
+  (data ?? []).forEach((row: any) => {
+    const key = row.attendance_id as string;
+    if (!map[key]) map[key] = [];
+    map[key].push({
+      attendanceId: key,
+      slot: row.slot ?? 0,
+      action: (row.action as ScanAction) ?? 'check_in',
+      scannedAt: row.scanned_at,
+    });
+  });
+  return map;
+}
+
+export type OverallReport = {
+  students: number;
+  attended: number;
+  late: number;
+  absent: number;
+  /** present rate % over all students */
+  rate: number;
+  /** raw attendance row counts */
+  presentRows: number;
+  lateRows: number;
+  absentRows: number;
+  totalRows: number;
+};
+
+/**
+ * Admin: overall system attendance — how many students attended at least one
+ * event, how many are absent, plus the raw present/late/absent row counts.
+ */
+export async function getOverallReport(): Promise<OverallReport> {
+  const [students, rowsResult] = await Promise.all([
+    listProfiles().then((ps) => ps.filter((p) => p.role === 'student')),
+    supabase.from('attendance').select('student_id, status'),
+  ]);
+
+  const rows = rowsResult.data ?? [];
+  const byStudent: Record<string, string[]> = {};
+  rows.forEach((row: any) => {
+    if (!byStudent[row.student_id]) byStudent[row.student_id] = [];
+    byStudent[row.student_id].push(row.status);
+  });
+
+  let attended = 0;
+  let late = 0;
+  students.forEach((s) => {
+    const statuses = byStudent[s.id] ?? [];
+    if (statuses.some((st) => st !== 'absent')) {
+      attended += 1;
+      if (statuses.includes('late')) late += 1;
+    }
+  });
+
+  const presentRows = rows.filter((r: any) => r.status === 'present').length;
+  const lateRows = rows.filter((r: any) => r.status === 'late').length;
+  const absentRows = rows.filter((r: any) => r.status === 'absent').length;
+
+  return {
+    students: students.length,
+    attended,
+    late,
+    absent: Math.max(students.length - attended, 0),
+    rate: students.length > 0 ? Math.round((attended / students.length) * 100) : 0,
+    presentRows,
+    lateRows,
+    absentRows,
+    totalRows: rows.length,
+  };
+}
+
+export type GroupRate = {
+  group: string;
+  total: number;
+  present: number;
+  late: number;
+  absent: number;
+  /** present % over the group */
+  rate: number;
+  /** absent % over the group */
+  absentRate: number;
+};
+
+/**
+ * Department / education-level breakdown:
+ * "how many students from a department are present" as present vs absent %.
+ */
+export async function getDepartmentRates(): Promise<GroupRate[]> {
+  const [students, rowsResult] = await Promise.all([
+    listProfiles().then((ps) => ps.filter((p) => p.role === 'student')),
+    supabase.from('attendance').select('student_id, status'),
+  ]);
+
+  const rows = rowsResult.data ?? [];
+  const byStudent: Record<string, string[]> = {};
+  rows.forEach((row: any) => {
+    if (!byStudent[row.student_id]) byStudent[row.student_id] = [];
+    byStudent[row.student_id].push(row.status);
+  });
+
+  const groups: Record<string, { total: number; present: number; late: number }> = {};
+
+  students.forEach((p: Profile) => {
+    const key = p.department || educationLabel(p.education) || 'Unassigned';
+    if (!groups[key]) groups[key] = { total: 0, present: 0, late: 0 };
+    groups[key].total += 1;
+
+    const statuses = byStudent[p.id] ?? [];
+    if (statuses.some((st) => st !== 'absent')) {
+      groups[key].present += 1;
+      if (statuses.includes('late')) groups[key].late += 1;
+    }
+  });
+
+  return Object.entries(groups)
+    .map(([group, g]) => ({
+      group,
+      total: g.total,
+      present: g.present,
+      late: g.late,
+      absent: Math.max(g.total - g.present, 0),
+      rate: g.total > 0 ? Math.round((g.present / g.total) * 100) : 0,
+      absentRate: g.total > 0 ? Math.round(((g.total - g.present) / g.total) * 100) : 0,
+    }))
+    .sort((a, b) => b.total - a.total);
 }

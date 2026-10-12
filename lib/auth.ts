@@ -66,16 +66,27 @@ export async function signIn(email: string, password: string) {
 }
 
 /**
- * Register new user and set custom metadata (full_name, role).
- * A database trigger copies this metadata into `profiles` on sign-up.
+ * Register new user and set custom metadata (name, role, personnel ID and
+ * education data). A database trigger copies this metadata into `profiles`
+ * on sign-up.
  * NOTE: registration only offers student/teacher — administrator accounts
- * are promoted by an existing admin (or seeded via SQL).
+ * are promoted by an existing admin (or seeded via SQL / admin_create_user).
  */
-export async function signUp(
-  email: string,
-  password: string,
-  metadata?: { full_name?: string; role?: 'student' | 'teacher' }
-) {
+export type SignUpMetadata = {
+  full_name?: string;
+  role?: 'student' | 'teacher';
+  student_no?: string;
+  education?: string;
+  department?: string;
+  year_level?: string;
+  block?: string;
+  strand?: string;
+  grade_level?: string;
+  section?: string;
+  is_advisory?: boolean;
+};
+
+export async function signUp(email: string, password: string, metadata?: SignUpMetadata) {
   const { data, error } = await supabase.auth.signUp({
     email,
     password,

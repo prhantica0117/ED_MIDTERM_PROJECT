@@ -15,11 +15,18 @@ import { Link, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import AppButton from '@/components/AppButton';
+import CheckboxField from '@/components/CheckboxField';
+import EducationFields from '@/components/EducationFields';
 import FeedbackBanner from '@/components/FeedbackBanner';
 import FormField from '@/components/FormField';
 import GlassCard from '@/components/GlassCard';
 import Header from '@/components/Header';
 import { COLORS } from '@/constants/colors';
+import {
+  EMPTY_EDUCATION_FORM,
+  validateEducationForm,
+  type EducationForm,
+} from '@/constants/education';
 import { GUTTER, RADIUS, SPACING } from '@/constants/theme';
 import { signUp } from '@/lib/auth';
 import {
@@ -29,19 +36,39 @@ import {
   validatePasswordConfirm,
 } from '@/lib/validation';
 
+type Role = 'student' | 'teacher';
+
 export default function RegisterScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
+  const [studentNo, setStudentNo] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [role, setRole] = useState<'student' | 'teacher'>('student');
+  const [role, setRole] = useState<Role>('student');
+  const [isAdvisory, setIsAdvisory] = useState<boolean | null>(null);
+  const [eduForm, setEduForm] = useState<EducationForm>(EMPTY_EDUCATION_FORM);
+  const [agreed, setAgreed] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  const patchEducation = (patch: Partial<EducationForm>) =>
+    setEduForm((prev) => ({ ...prev, ...patch }));
+
+  const switchRole = (next: Role) => {
+    setRole(next);
+    setIsAdvisory(null);
+    setEduForm(EMPTY_EDUCATION_FORM);
+    setError(null);
+  };
+
+  // Education details are always required for students, and for teachers who
+  // answer "Yes" to the Advisory Teacher question.
+  const needsEducation = role === 'student' || isAdvisory === true;
 
   // Event: user presses "Create Account" → validate → register
   const handleRegister = async () => {
@@ -53,17 +80,41 @@ export default function RegisterScreen() {
     const emailError = validateEmail(email);
     if (emailError) return setError(emailError);
 
+    if (!studentNo.trim()) return setError('Student/Personnel ID is required.');
+
     const passwordError = validatePassword(password);
     if (passwordError) return setError(passwordError);
 
     const confirmError = validatePasswordConfirm(password, confirmPassword);
     if (confirmError) return setError(confirmError);
 
+    if (role === 'teacher' && isAdvisory === null) {
+      return setError('Please indicate whether you are an Advisory Teacher.');
+    }
+
+    if (needsEducation) {
+      const eduError = validateEducationForm(eduForm);
+      if (eduError) return setError(eduError);
+    }
+
+    if (!agreed) {
+      return setError('You must agree to the Data Privacy Act before registering.');
+    }
+
     setLoading(true);
     try {
       const { data, error: authError } = await signUp(email.trim(), password, {
         full_name: fullName.trim(),
         role,
+        student_no: studentNo.trim(),
+        education: needsEducation ? eduForm.education : '',
+        department: needsEducation ? eduForm.department : '',
+        year_level: needsEducation ? eduForm.year_level : '',
+        block: needsEducation ? eduForm.block : '',
+        strand: needsEducation ? eduForm.strand : '',
+        grade_level: needsEducation ? eduForm.grade_level : '',
+        section: needsEducation ? eduForm.section.trim() : '',
+        is_advisory: role === 'teacher' && isAdvisory === true,
       });
 
       if (authError) {
@@ -139,6 +190,102 @@ export default function RegisterScreen() {
                   icon="mail-outline"
                 />
                 <FormField
+                  label="Student / Personnel ID"
+                  value={studentNo}
+                  onChangeText={setStudentNo}
+                  placeholder="e.g. 2026-0001"
+                  autoCapitalize="characters"
+                  editable={!loading}
+                  icon="card-outline"
+                />
+
+                <Text style={styles.label}>I am a…</Text>
+                <View style={styles.roleRow}>
+                  {(['student', 'teacher'] as const).map((option) => (
+                    <Pressable
+                      key={option}
+                      style={[styles.roleChip, role === option && styles.roleChipActive]}
+                      onPress={() => switchRole(option)}
+                    >
+                      <Ionicons
+                        name={option === 'student' ? 'book-outline' : 'school-outline'}
+                        size={18}
+                        color={role === option ? COLORS.accent : COLORS.textSecondary}
+                      />
+                      <Text
+                        style={[styles.roleChipText, role === option && styles.roleChipTextActive]}
+                      >
+                        {option === 'student' ? 'Student' : 'Teacher'}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+
+                {role === 'teacher' ? (
+                  <>
+                    <Text style={styles.label}>Are you an Advisory Teacher?</Text>
+                    <View style={styles.roleRow}>
+                      <Pressable
+                        style={[styles.roleChip, isAdvisory === true && styles.roleChipActive]}
+                        onPress={() => {
+                          setIsAdvisory(true);
+                          setError(null);
+                        }}
+                      >
+                        <Ionicons
+                          name="checkmark-circle-outline"
+                          size={18}
+                          color={isAdvisory === true ? COLORS.accent : COLORS.textSecondary}
+                        />
+                        <Text
+                          style={[
+                            styles.roleChipText,
+                            isAdvisory === true && styles.roleChipTextActive,
+                          ]}
+                        >
+                          Yes
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.roleChip, isAdvisory === false && styles.roleChipActive]}
+                        onPress={() => {
+                          setIsAdvisory(false);
+                          setEduForm(EMPTY_EDUCATION_FORM);
+                          setError(null);
+                        }}
+                      >
+                        <Ionicons
+                          name="close-circle-outline"
+                          size={18}
+                          color={isAdvisory === false ? COLORS.accent : COLORS.textSecondary}
+                        />
+                        <Text
+                          style={[
+                            styles.roleChipText,
+                            isAdvisory === false && styles.roleChipTextActive,
+                          ]}
+                        >
+                          No
+                        </Text>
+                      </Pressable>
+                    </View>
+                    <Text style={styles.roleHint}>
+                      Advisory teachers choose the block/section they handle — used when creating
+                      class schedules.
+                    </Text>
+                  </>
+                ) : null}
+
+                {needsEducation ? (
+                  <EducationFields
+                    title={role === 'student' ? 'Education Details' : 'Advisory Class'}
+                    form={eduForm}
+                    onChange={patchEducation}
+                    disabled={loading}
+                  />
+                ) : null}
+
+                <FormField
                   label="Password"
                   value={password}
                   onChangeText={setPassword}
@@ -157,27 +304,20 @@ export default function RegisterScreen() {
                   icon="lock-closed-outline"
                 />
 
-                <Text style={styles.label}>I am a…</Text>
-                <View style={styles.roleRow}>
-                  {(['student', 'teacher'] as const).map((option) => (
-                    <Pressable
-                      key={option}
-                      style={[styles.roleChip, role === option && styles.roleChipActive]}
-                      onPress={() => setRole(option)}
-                    >
-                      <Ionicons
-                        name={option === 'student' ? 'book-outline' : 'school-outline'}
-                        size={18}
-                        color={role === option ? COLORS.accent : COLORS.textSecondary}
-                      />
-                      <Text
-                        style={[styles.roleChipText, role === option && styles.roleChipTextActive]}
-                      >
-                        {option === 'student' ? 'Student' : 'Teacher'}
-                      </Text>
-                    </Pressable>
-                  ))}
+                <View style={styles.privacyBox}>
+                  <CheckboxField
+                    label="I agree to the Data Privacy Act of 2012 (RA 10173)"
+                    description="I consent to the collection and processing of my personal information — name, ID, education details and attendance records — solely for the school's event/class attendance system."
+                    checked={agreed}
+                    onToggle={() => {
+                      setAgreed((prev) => !prev);
+                      setError(null);
+                    }}
+                    disabled={loading}
+                    danger
+                  />
                 </View>
+
                 <Text style={styles.roleHint}>
                   Administrator accounts are assigned by the school system administrator.
                 </Text>
@@ -248,6 +388,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.4,
     marginBottom: SPACING.sm,
+    marginTop: SPACING.xs,
   },
   roleRow: {
     flexDirection: 'row',
@@ -284,6 +425,13 @@ const styles = StyleSheet.create({
     color: COLORS.textMuted,
     marginBottom: SPACING.md,
     lineHeight: 17,
+  },
+  privacyBox: {
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+    paddingTop: SPACING.md,
+    marginTop: SPACING.xs,
+    marginBottom: SPACING.sm,
   },
   link: {
     fontSize: 14,

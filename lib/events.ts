@@ -1,6 +1,17 @@
+import type { EventTarget, EducationInfo } from '../constants/education';
 import { supabase } from './supabase';
 
 export type EventStatus = 'open' | 'closed';
+export type EventType = 'event' | 'class';
+export type ScanAction = 'check_in' | 'check_out';
+
+/** One check-in / check-out window (absolute ISO timestamps). */
+export type ScanWindow = {
+  slot: number;
+  action: ScanAction;
+  start: string;
+  end: string;
+};
 
 /** Row shape of the public `events` table. */
 export type CloudEvent = {
@@ -13,6 +24,9 @@ export type CloudEvent = {
   venue: string | null;
   description: string | null;
   status: EventStatus;
+  event_type: EventType;
+  target: EventTarget | null;
+  scan_windows: ScanWindow[] | null;
   created_by: string | null;
   created_at: string;
 };
@@ -25,7 +39,43 @@ export type EventInput = {
   eventDate: string; // YYYY-MM-DD
   startsAtISO: string;
   endsAtISO: string;
+  eventType?: EventType;
+  target?: EventTarget;
+  scanWindows?: ScanWindow[];
 };
+
+/** jsonb columns come back as objects — normalise safely. */
+export function parseEventTarget(raw: unknown): EventTarget | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const audiences = Array.isArray(obj.audiences) ? (obj.audiences as string[]) : ['all'];
+  const classTarget = (obj.classTarget ?? null) as EducationInfo | null;
+  return { audiences: audiences.length ? audiences : ['all'], classTarget };
+}
+
+/** jsonb scan_windows come back as [{slot, action, start, end}] — validate shape. */
+export function parseScanWindows(raw: unknown): ScanWindow[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((w): w is Record<string, unknown> => !!w && typeof w === 'object')
+    .map((w, index) => ({
+      slot: typeof w.slot === 'number' ? w.slot : index,
+      action: w.action === 'check_out' ? ('check_out' as const) : ('check_in' as const),
+      start: typeof w.start === 'string' ? w.start : '',
+      end: typeof w.end === 'string' ? w.end : '',
+    }))
+    .filter((w) => w.start && w.end)
+    .sort((a, b) => a.slot - b.slot);
+}
+
+function normalizeEventRow(row: any): CloudEvent {
+  return {
+    ...row,
+    event_type: row.event_type === 'class' ? 'class' : 'event',
+    target: parseEventTarget(row.target),
+    scan_windows: parseScanWindows(row.scan_windows),
+  };
+}
 
 function mapWriteError(message: string, code?: string): string {
   if (code === '23505') return 'That event code already exists. Pick a different one.';
@@ -54,6 +104,9 @@ export async function createEvent(
         venue: input.venue.trim(),
         description: input.description.trim() || null,
         status: 'open' as EventStatus,
+        event_type: input.eventType ?? 'event',
+        target: input.target ?? { audiences: ['all'] },
+        scan_windows: input.scanWindows ?? [],
         created_by: user?.id ?? null,
       },
     ])
@@ -67,7 +120,7 @@ export async function createEvent(
     };
   }
 
-  return { event: data as CloudEvent, error: null };
+  return { event: normalizeEventRow(data), error: null };
 }
 
 /** Edit an event's details (owner teacher or admin — enforced by RLS). */
@@ -83,6 +136,9 @@ export async function updateEvent(
   if (patch.eventDate !== undefined) payload.event_date = patch.eventDate;
   if (patch.startsAtISO !== undefined) payload.start_time = patch.startsAtISO;
   if (patch.endsAtISO !== undefined) payload.end_time = patch.endsAtISO;
+  if (patch.eventType !== undefined) payload.event_type = patch.eventType;
+  if (patch.target !== undefined) payload.target = patch.target;
+  if (patch.scanWindows !== undefined) payload.scan_windows = patch.scanWindows;
   if (patch.status !== undefined) payload.status = patch.status;
 
   const { error } = await supabase.from('events').update(payload).eq('id', eventId);
@@ -128,7 +184,7 @@ export async function listEvents(options: ListEventsOptions = {}): Promise<Cloud
 
   const { data, error } = await query;
   if (error || !data) return [];
-  return data as CloudEvent[];
+  return (data as any[]).map(normalizeEventRow);
 }
 
 export async function getEventByCode(code: string): Promise<CloudEvent | null> {
@@ -139,7 +195,7 @@ export async function getEventByCode(code: string): Promise<CloudEvent | null> {
     .maybeSingle();
 
   if (error || !data) return null;
-  return data as CloudEvent;
+  return normalizeEventRow(data);
 }
 
 export async function getEventById(id: string): Promise<CloudEvent | null> {
@@ -150,7 +206,7 @@ export async function getEventById(id: string): Promise<CloudEvent | null> {
     .maybeSingle();
 
   if (error || !data) return null;
-  return data as CloudEvent;
+  return normalizeEventRow(data);
 }
 
 /** Auto-generated event code, e.g. EVT-2026-4F2K. */

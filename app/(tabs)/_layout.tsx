@@ -53,7 +53,7 @@ const PROFILE: TabDef = {
 
 /**
  * Role-based tab visibility (authorization in the UI layer):
- *  • Student  → Home · Scan · Records · Profile
+ *  • Student  → Home · Scan · Events · Records · Profile
  *  • Teacher  → Home · Events · Records · Profile
  *  • Admin    → Home · Events · Records · Users · Profile
  * Hidden tabs are still routed but each screen also re-checks the role.
@@ -61,7 +61,7 @@ const PROFILE: TabDef = {
 function tabsForRole(role: string | null): TabDef[] {
   if (role === 'teacher') return [HOME, EVENTS, HISTORY, PROFILE];
   if (role === 'admin') return [HOME, EVENTS, HISTORY, USERS, PROFILE];
-  return [HOME, SCAN, HISTORY, PROFILE];
+  return [HOME, SCAN, EVENTS, HISTORY, PROFILE];
 }
 
 export default function TabLayout() {

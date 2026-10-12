@@ -11,12 +11,19 @@ import GlassCard from '@/components/GlassCard';
 import Header from '@/components/Header';
 import { COLORS } from '@/constants/colors';
 import { GUTTER, RADIUS, SPACING } from '@/constants/theme';
-import { registerAttendance, type ScanResult } from '@/lib/attendance';
+import { registerAttendance, actionLabel, formatClock, type ScanResult } from '@/lib/attendance';
 import { useAuth } from '@/lib/auth';
 import { canScan, useRole } from '@/lib/roles';
 
 function failureTone(code: string): 'error' | 'warning' {
-  if (code === 'duplicate' || code === 'not_started' || code === 'ended') return 'warning';
+  if (
+    code === 'duplicate' ||
+    code === 'not_started' ||
+    code === 'wrong_window' ||
+    code === 'ended'
+  ) {
+    return 'warning';
+  }
   return 'error';
 }
 
@@ -126,7 +133,10 @@ export default function ScanScreen() {
 
   return (
     <View style={styles.container}>
-      <Header title="Scan QR" subtitle="Point your camera at the event QR code" />
+      <Header
+        title="Scan QR"
+        subtitle="Scan during your Check-In / Check-Out window"
+      />
 
       {cameraReady && !result ? (
         <View style={styles.cameraWrap}>
@@ -148,14 +158,24 @@ export default function ScanScreen() {
         <GlassCard style={styles.resultCard}>
           {result.ok ? (
             <>
-              <Ionicons name="checkmark-circle" size={42} color="#5FE0A0" />
-              <Text style={styles.resultTitle}>Attendance Recorded!</Text>
+              <Ionicons
+                name={result.action === 'check_out' ? 'log-out-outline' : 'checkmark-circle'}
+                size={42}
+                color={result.action === 'check_out' ? '#F7C46B' : '#5FE0A0'}
+              />
+              <Text style={styles.resultTitle}>
+                {actionLabel(result.action)} Recorded!
+              </Text>
               <Text style={styles.resultEvent}>{result.event.title}</Text>
               <Text style={styles.resultMeta}>
                 {result.event.venue ? `📍 ${result.event.venue}` : 'Venue TBA'}
               </Text>
               <Text style={styles.resultMeta}>
-                {result.status.toUpperCase()} · {new Date(result.recordedAt).toLocaleTimeString()}
+                {formatClock(result.windowStart)} – {formatClock(result.windowEnd)} window ·{' '}
+                {result.status.toUpperCase()}
+              </Text>
+              <Text style={styles.resultMeta}>
+                Scanned at {new Date(result.recordedAt).toLocaleTimeString()}
               </Text>
               <Text style={styles.resultCode}>Code: {result.event.eventCode}</Text>
               <AppButton
