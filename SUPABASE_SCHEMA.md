@@ -4,7 +4,7 @@
 
 The canonical schema lives in `supabase/schema.sql`. Open Supabase Dashboard >
 SQL Editor > New query, paste that ENTIRE file, and press Run. One file, one
-run. Safe to re-run and safe over the existing database: no DROP TABLE
+run. Sarfe to re-un and safe over the existing database: no DROP TABLE
 anywhere, missing columns are added, existing rows and timestamps are
 preserved.
 
