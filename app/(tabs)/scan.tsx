@@ -105,6 +105,10 @@ export default function ScanScreen() {
 
   const cameraReady = Platform.OS !== 'web' && permission.granted;
 
+  // When the last scan failed because the event is closed, hide the manual
+  // code-entry option so students cannot keep retrying a closed event.
+  const eventClosed = result !== null && !result.ok && result.code === 'closed';
+
   // ── Camera permission flow ────────────────────────────────────────────
   if (Platform.OS !== 'web' && !permission.granted) {
     return (
@@ -145,7 +149,7 @@ export default function ScanScreen() {
             onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
           />
           <View style={styles.overlay} pointerEvents="none">
-            <View style={styles.frame} />
+
             <Text style={styles.hint}>
               {processing ? 'Verifying…' : 'Align the QR code inside the frame'}
             </Text>
@@ -205,7 +209,7 @@ export default function ScanScreen() {
       ) : null}
 
       {/* Manual entry — works on web / when the camera is unavailable */}
-      {(!cameraReady || result) && !processing ? (
+      {(!cameraReady || result) && !processing && !eventClosed ? (
         <GlassCard style={styles.manualCard}>
           <Text style={styles.manualTitle}>Enter event code manually</Text>
           <Text style={styles.manualHint}>
@@ -229,6 +233,7 @@ export default function ScanScreen() {
           />
         </GlassCard>
       ) : null}
+      
     </View>
   );
 }
@@ -285,7 +290,7 @@ const styles = StyleSheet.create({
   overlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-end',
   },
   frame: {
     width: 200,

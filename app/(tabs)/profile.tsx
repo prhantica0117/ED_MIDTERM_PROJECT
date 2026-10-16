@@ -93,7 +93,7 @@ export default function ProfileScreen() {
         {/* ── Centered personal information card (read-only) ─────────── */}
         <GlassCard style={styles.hero}>
           <View style={styles.avatar}>
-            <Ionicons name="person" size={38} color={COLORS.textOnPrimary} />
+            <Ionicons name="person" size={88} color={COLORS.textOnPrimary} />
           </View>
 
           {/* Role with the Education level beside it */}
@@ -169,9 +169,9 @@ const styles = StyleSheet.create({
     marginBottom: SPACING.lg,
   },
   avatar: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
+    width: 160,
+    height: 160,
+    borderRadius: 80,
     backgroundColor: 'rgba(11, 48, 152, 0.55)',
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.18)',

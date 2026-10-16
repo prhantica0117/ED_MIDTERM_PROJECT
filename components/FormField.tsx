@@ -1,6 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useState } from 'react';
 import {
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -18,6 +19,8 @@ type Props = {
   placeholder?: string;
   error?: string | null;
   secureTextEntry?: boolean;
+  /** Show an eye icon that lets the user reveal/hide the password. Opt-in. */
+  showPasswordToggle?: boolean;
   keyboardType?: KeyboardTypeOptions;
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
   multiline?: boolean;
@@ -43,8 +46,13 @@ export default function FormField({
   editable = true,
   icon,
   hint,
+  showPasswordToggle,
 }: Props) {
   const [focused, setFocused] = useState(false);
+  const [revealed, setRevealed] = useState(false);
+
+  const canToggle = !!showPasswordToggle && !!secureTextEntry;
+  const hidden = !!secureTextEntry && !revealed;
 
   return (
     <View style={styles.wrapper}>
@@ -73,13 +81,28 @@ export default function FormField({
           onBlur={() => setFocused(false)}
           placeholder={placeholder}
           placeholderTextColor={COLORS.textMuted}
-          secureTextEntry={secureTextEntry}
+          secureTextEntry={hidden}
           keyboardType={keyboardType}
           autoCapitalize={autoCapitalize}
           autoCorrect={false}
           multiline={multiline}
           editable={editable}
         />
+        {canToggle ? (
+          <Pressable
+            onPress={() => setRevealed((r) => !r)}
+            style={styles.eyeBtn}
+            accessibilityRole="button"
+            accessibilityLabel={revealed ? 'Hide password' : 'Show password'}
+            hitSlop={8}
+          >
+            <Ionicons
+              name={revealed ? 'eye-off-outline' : 'eye-outline'}
+              size={20}
+              color={COLORS.textMuted}
+            />
+          </Pressable>
+        ) : null}
       </View>
       {hint && !error ? <Text style={styles.hint}>{hint}</Text> : null}
       {error ? (
@@ -127,6 +150,10 @@ const styles = StyleSheet.create({
   },
   icon: {
     marginRight: SPACING.sm,
+  },
+  eyeBtn: {
+    padding: 6,
+    marginLeft: SPACING.xs,
   },
   input: {
     flex: 1,

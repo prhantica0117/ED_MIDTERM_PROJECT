@@ -102,6 +102,7 @@ export default function LoginScreen() {
                 onChangeText={setPassword}
                 placeholder="Enter your password"
                 secureTextEntry
+                showPasswordToggle
                 editable={!loading}
                 icon="lock-closed-outline"
               />
