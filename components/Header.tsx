@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
-import { Image } from 'expo-image';
 
+import Logo from '@/components/Logo';
 import { COLORS } from '@/constants/colors';
 import { SPACING } from '@/constants/theme';
 
@@ -29,13 +29,13 @@ export default function Header({ title, subtitle, align = 'center' }: Props) {
         Animated.sequence([
           Animated.timing(pulse, {
             toValue: 1,
-            duration: 1400,
+            duration: 1000,
             easing: Easing.inOut(Easing.ease),
             useNativeDriver: true,
           }),
           Animated.timing(pulse, {
             toValue: 0,
-            duration: 1400,
+            duration: 1000,
             easing: Easing.inOut(Easing.ease),
             useNativeDriver: true,
           }),
@@ -54,12 +54,7 @@ export default function Header({ title, subtitle, align = 'center' }: Props) {
     <View style={[styles.container, isLeft ? styles.alignLeft : styles.alignCenter]}>
       <Animated.View style={{ opacity, transform: [{ translateY }, { scale }] }}>
         <View style={styles.logoCircle}>
-          <Image
-            source={require('../assets/images/logo.png')}
-            style={styles.logoImage}
-            contentFit="cover"
-            accessibilityLabel="QR Attendance logo"
-          />
+          <Logo variant="dark" width={96} height={96} />
         </View>
       </Animated.View>
       <View style={isLeft ? undefined : styles.textBlockCentered}>
@@ -92,7 +87,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: 'transparent',
     borderColor: COLORS.glassBorder,
-    borderWidth: 1,
+    borderWidth: 0,
     marginBottom: SPACING.md,
   },
   logoImage: {
