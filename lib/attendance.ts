@@ -13,7 +13,7 @@ import {
   type ScanWindow,
 } from './events';
 import { getProfile, listProfiles, type Profile } from './profiles';
-import { parseQRPayload } from './qr';
+import { parseQRPayload, isValidWindow } from './qr';
 import { supabase } from './supabase';
 import { toLocalDateString } from './validation';
 
@@ -111,6 +111,15 @@ export async function registerAttendance(
   const event = await getEventByCode(parsed.payload.event);
   if (!event) {
     return fail('invalid_qr', 'Invalid QR code — this event does not exist.');
+  }
+
+  // Step 3b — TOTP time-window validation (current or previous 30s slot only)
+  const payloadWindow = parsed.payload.window;
+  if (typeof payloadWindow === 'number' && !isValidWindow(payloadWindow)) {
+    return fail(
+      'invalid_qr',
+      'QR code has expired. Please ask the teacher to refresh the code.'
+    );
   }
 
   // Step 4 — closed events reject attendance

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import AnamorphicBackground from '@/components/AnamorphicBackground';
 import { COLORS } from '@/constants/colors';
@@ -28,30 +29,32 @@ export default function RootLayout() {
   }, [session, loading, segments]);
 
   return (
-    <View style={styles.root}>
-      {/* Anamorphic gradient backdrop — sits behind every screen */}
-      <AnamorphicBackground />
-      <StatusBar style="light" />
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.root} edges={['top', 'left', 'right', 'bottom']}>
+        {/* Anamorphic gradient backdrop — sits behind every screen */}
+        <AnamorphicBackground />
+        <StatusBar style="light" />
 
-      {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={COLORS.accent} />
-          <Text style={styles.loadingText}>Starting QR Attendance…</Text>
-        </View>
-      ) : (
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: COLORS.backgroundDeep },
-          }}
-        >
-          <Stack.Screen name="login" />
-          <Stack.Screen name="register" />
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="+not-found" />
-        </Stack>
-      )}
-    </View>
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={COLORS.accent} />
+            <Text style={styles.loadingText}>Starting QR Attendance…</Text>
+          </View>
+        ) : (
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: COLORS.backgroundDeep },
+            }}
+          >
+            <Stack.Screen name="login" />
+            <Stack.Screen name="register" />
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="+not-found" />
+          </Stack>
+        )}
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 

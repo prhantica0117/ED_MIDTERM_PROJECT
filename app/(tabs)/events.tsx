@@ -3,7 +3,7 @@ import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useEffect, useMemo } from 'react';
 import {
   Alert,
   Modal,
@@ -58,7 +58,7 @@ import {
   type ScanAction,
   type ScanWindow,
 } from '@/lib/events';
-import { buildQRPayload } from '@/lib/qr';
+import { buildTOTPQRPayload, TOTP_INTERVAL_MS } from '@/lib/qr';
 import { useAuth } from '@/lib/auth';
 import { canManageEvents, useRole } from '@/lib/roles';
 import { toLocalDateString, validateEventForm } from '@/lib/validation';
@@ -122,6 +122,31 @@ export default function EventsScreen() {
 
   // QR modal state
   const [qrEvent, setQrEvent] = useState<CloudEvent | null>(null);
+
+  // Tick counter that increments every 30s while the QR modal is open,
+  // used to force the TOTP QR value to recompute on rotation.
+  const [rotationTick, setRotationTick] = useState(0);
+
+  // TOTP QR value — computed synchronously during render (never empty when modal is open).
+  // Rotates every 30s via rotationTick below.
+  const qrValue = useMemo(() => {
+    if (!qrEvent) return '';
+    return buildTOTPQRPayload({
+      eventId: qrEvent.event_code,
+      title: qrEvent.title,
+      start: qrEvent.start_time ?? undefined,
+      end: qrEvent.end_time ?? undefined,
+    });
+  }, [qrEvent, rotationTick]);
+
+  // Rotate the TOTP window every 30 seconds while the QR modal is open.
+  useEffect(() => {
+    if (!qrEvent) return;
+    const interval = setInterval(() => {
+      setRotationTick((t) => t + 1);
+    }, TOTP_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [qrEvent]);
 
   const isAndroid = Platform.OS === 'android';
   const isAdmin = role === 'admin';
@@ -802,12 +827,7 @@ export default function EventsScreen() {
               <View style={styles.qrBox}>
               {qrEvent ? (
                 <QRCode
-                  value={buildQRPayload({
-                    eventId: qrEvent.event_code,
-                    title: qrEvent.title,
-                    start: qrEvent.start_time ?? undefined,
-                    end: qrEvent.end_time ?? undefined,
-                  })}
+                  value={qrValue ?? ''}
                   size={220}
                 />
               ) : null}
